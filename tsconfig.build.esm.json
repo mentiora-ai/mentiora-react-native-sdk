@@ -11,5 +11,13 @@
     "declarationMap": true
   },
   "include": ["src"],
-  "exclude": ["node_modules", "lib", "example", "**/__tests__", "**/*.test.ts", "**/*.test.tsx"]
+  "exclude": [
+    "node_modules",
+    "lib",
+    "example",
+    "**/__tests__",
+    "**/__mocks__",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
 }

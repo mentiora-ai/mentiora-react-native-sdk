@@ -20,7 +20,7 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node", "jest"]
   },
   "include": ["src", "scripts"],
   "exclude": ["node_modules", "lib", "example"]
