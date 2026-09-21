@@ -7,7 +7,13 @@
 
 export const PROTOCOL_VERSION = 1 as const;
 
-export const SUPPORTED_VERSIONS: readonly [1] = [1];
+// Deliberately `readonly number[]`, not the narrower `readonly [1]`: callers
+// (Task 3) run `SUPPORTED_VERSIONS.includes(protocolVersion)` against a
+// page-supplied `number`, and a `readonly [1]` tuple rejects that argument at
+// compile time (TS2345). `as const satisfies readonly number[]` does not fix
+// this — `satisfies` checks assignability without widening the inferred type,
+// so the array stays `readonly [1]`; only an explicit type annotation widens it.
+export const SUPPORTED_VERSIONS: readonly number[] = [PROTOCOL_VERSION];
 
 export const ErrorCode = {
   invalidRequest: -32600,
