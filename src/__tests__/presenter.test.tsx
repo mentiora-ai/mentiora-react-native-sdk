@@ -6,7 +6,7 @@
 // fired as a DOM-style event.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { useEffect } from 'react';
+import { StrictMode, useEffect } from 'react';
 import {
   __lastWebView,
   __resetWebViews,
@@ -258,19 +258,26 @@ test('open() succeeds when the host mounts after its caller, in the same commit'
   expect(errors).toEqual([]);
 });
 
-test('open() succeeds when the host mounts before its caller, in the same commit', async () => {
+test('open() succeeds with the host under StrictMode (the RN/Expo template default)', async () => {
+  // Fix round 4, Critical 2. StrictMode mounts effects, tears them down and
+  // mounts them again on the SAME fiber, without re-rendering. Counting
+  // `hostIds` membership at render only (fix round 3's answer to Major 5,
+  // above) meant the push ran once and the subscribe cleanup's splice ran
+  // twice, so the host was deregistered permanently and `open()` threw
+  // "needs <MentioraHost /> mounted" at an app whose host IS mounted — in
+  // every new RN/Expo app, since their templates wrap the root in StrictMode.
+  // The other order (the host-before-caller sibling case that used to live
+  // here) is covered by the test above: it catches nothing this pair doesn't.
   Mentiora.configure(cfg);
-  const errors: unknown[] = [];
   await render(
-    <>
+    <StrictMode>
       <MentioraHost />
-      <OpenOnMount onError={(e) => errors.push(e)} />
-    </>,
+    </StrictMode>,
   );
-  await waitFor(() => {
-    expect(screen.getByTestId('mentiora-webview')).toBeTruthy();
+  await act(async () => {
+    await expect(Mentiora.open()).resolves.toBeUndefined();
   });
-  expect(errors).toEqual([]);
+  expect(screen.getByTestId('mentiora-webview')).toBeTruthy();
 });
 
 test('close before configure is a no-op, not a throw', () => {
@@ -342,20 +349,42 @@ test('after a closed-state logout the next open initializes with the rotated ins
   expect(after).not.toBe(before);
 });
 
-test('logout reloads an inline widget by remounting its WebView', async () => {
+test('logout reloads an inline widget onto a page that can handshake, under a new session key', async () => {
   // Fix round 3, Major 8: design.md §2.4's "logout() ... reloads whichever
   // widgets are mounted" applies to an INLINE widget too, not only the one
-  // inside the Modal — `MentioraWidget` now subscribes to `runtime.onReload`
-  // itself. The original test here registered its OWN listener directly on
-  // the runtime and could not have caught a widget that never subscribed at
-  // all; this one mounts a real widget and watches ITS OWN WebView instance.
+  // inside the Modal — `MentioraWidget` subscribes to `runtime.onReload`
+  // itself. The original test here registered its OWN listener on the runtime
+  // and could not have caught a widget that never subscribed at all.
+  //
+  // Fix round 4, Critical 1: the version after that one asserted only that the
+  // WebView INSTANCE changed, which is the mechanism, not the outcome — and
+  // that gap is exactly how a remount with no load boundary shipped. Without
+  // `beginFreshLoad()` (so without `peer.resetLoad()`) the remounted page is
+  // dead: its `initialize` is answered `-32600 "initialize already completed
+  // for this page load"`, that rejection is STAMPED with the pre-logout
+  // session key, and the peer goes on authorizing that key for the next
+  // user's page. Assert the outcome instead: the fresh page completes a
+  // handshake, and nothing sent to it carries the previous session's key.
   Mentiora.configure(cfg);
   await render(<MentioraWidget {...cfg} />);
   const before = __lastWebView();
+  await handshake(screen.getByTestId('mentiora-webview'));
+  const keyBefore = currentSessionKey(before);
+
   await act(async () => {
     await Mentiora.logout();
   });
-  expect(__lastWebView()).not.toBe(before);
+
+  const after = __lastWebView();
+  expect(after).not.toBe(before); // remounted, not reloaded in place
+  // Throws ("no installId in the handshake reply") if the page got `-32600`
+  // instead of a result — i.e. if the remount skipped the load boundary.
+  expect(await handshakeInstallId(screen.getByTestId('mentiora-webview'))).toEqual(
+    expect.any(String),
+  );
+  expect(
+    sentFrom(after).map((message) => (message.params as { sessionKey?: string })?.sessionKey),
+  ).not.toContain(keyBefore);
 });
 
 test('an inline widget unsubscribes from runtime.onReload on unmount', async () => {

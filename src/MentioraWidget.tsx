@@ -449,9 +449,29 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // the SAME object across renders for a given `embedKey` (`getRuntime`
   // memoises per key and only swaps `runtime.identity` in place), so this
   // resubscribes only if the embed key itself changes, never on every render.
+  //
+  // `beginFreshLoad()` FIRST, exactly as `onRetry` does before its identical
+  // `setRemountKey` (fix round 4, Critical 1): a remount is a new top-level
+  // load, and without the boundary `peer.resetLoad()` never runs — the fresh
+  // page's `initialize` takes `-32600 "initialize already completed for this
+  // page load"` (the latch is still set), that rejection is stamped with the
+  // PRE-LOGOUT session key, which `currentSessionKey` still holds and the
+  // peer still authorizes, and a stale `backHeld` + non-null session key make
+  // `onHardwareBack` claim back presses into the post-logout page — the exact
+  // Modal trap fix round 3 closed. Every other remount in this file already
+  // goes through a boundary (`onRetry`, `scheduleRecovery`, the watchdog);
+  // this one skipped it. Reached through a ref (assigned where
+  // `beginFreshLoad` is defined, below) rather than captured directly, so
+  // this effect keeps depending on `runtime` alone — a plain capture would
+  // make `beginFreshLoad`, rebuilt every render, a dependency and resubscribe
+  // the reload listener on every single render.
   useEffect(() => {
-    return runtime.onReload(() => setRemountKey((k) => k + 1));
+    return runtime.onReload(() => {
+      freshLoad.current();
+      setRemountKey((k) => k + 1);
+    });
   }, [runtime]);
+  const freshLoad = useRef<() => void>(() => {});
 
   const generation = useRef(0);
   // Has THIS generation already had its one terminal callback? Shared across
@@ -540,6 +560,11 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     advanceGeneration();
     armWatchdog();
   };
+  // For the `runtime.onReload` effect above, which must not depend on this
+  // function's per-render identity. Only refs and the stable `peer` are read
+  // inside it, so "the latest one" and "the first one" behave identically —
+  // the ref is about dependency hygiene, not staleness.
+  freshLoad.current = beginFreshLoad;
 
   /** Schedules the ladder's own reload/remount `delayMs` from now, tagged to
    *  the CURRENT generation. When it fires, it advances the generation itself

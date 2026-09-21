@@ -81,7 +81,15 @@ const listeners = new Set<() => void>();
  *  regardless of JSX sibling order. Caveat accepted deliberately: a host
  *  that renders but never commits leaks an id here, which fails in the
  *  benign direction (`open()` succeeds, nothing ends up rendering) rather
- *  than the noisy false-alarm this replaces. */
+ *  than the noisy false-alarm this replaces.
+ *
+ *  The invariant this array keeps (fix round 4, Critical 2) is SET
+ *  membership, not a push/pop log: an id is added when the host renders AND
+ *  re-added, idempotently, on every subscribe (`registerHost`), while a
+ *  teardown removes it. Render alone is not enough, because React tears
+ *  effects down and sets them up again on the same fiber without re-rendering
+ *  (StrictMode, Offscreen, Fast Refresh) — a push that only ever happens at
+ *  render is spliced out by the first such cycle and never restored. */
 const hostIds: number[] = [];
 let nextHostId = 0;
 
@@ -100,6 +108,18 @@ const notify = (): void => {
  */
 const registerHost = (id: number, onChange: () => void): (() => void) => {
   listeners.add(onChange);
+  // Idempotent re-add, not a second source of truth (fix round 4, Critical 2).
+  // Render is what FIRST counts a host (see `hostIds` above, and `MentioraHost`
+  // below); this line only restores membership that a previous teardown of
+  // this same, still-mounted component removed. React 18/19 StrictMode — the
+  // RN and Expo templates' default — mounts effects, tears them down and
+  // mounts them again WITHOUT re-rendering, so the render-time push runs once
+  // while the splice below runs twice: without this, the id is gone forever
+  // and `open()` throws "needs <MentioraHost /> mounted" at a customer whose
+  // host is mounted. Same for anything else that recreates effects without a
+  // re-render (`<Activity>`/Offscreen, `react-freeze`, Fast Refresh), and for
+  // a host that outlives a `__resetPresenter()` and later resubscribes.
+  if (!hostIds.includes(id)) hostIds.push(id);
   if (state.activeHostId === null) state = { ...state, activeHostId: id };
   notify();
   return () => {
@@ -172,7 +192,9 @@ export const Mentiora = {
  *  would be live, not inert: a screen unmount or a Fast Refresh would
  *  silently discard `configure()`, and the next `open()` would throw "call
  *  configure() first" at a customer who already had. Tests reset explicitly
- *  instead. */
+ *  instead — before rendering anything, not with a host still mounted: this
+ *  empties `hostIds` and `listeners` outright, and a host that is already
+ *  mounted only lands back in `hostIds` if something makes it resubscribe. */
 export const __resetPresenter = (): void => {
   state = { visible: false, config: null, activeHostId: null };
   listeners.clear();
