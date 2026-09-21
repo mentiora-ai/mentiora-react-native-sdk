@@ -387,6 +387,29 @@ test('logout reloads an inline widget onto a page that can handshake, under a ne
   ).not.toContain(keyBefore);
 });
 
+test('logout clears a stale error surface instead of leaving it over the fresh page', async () => {
+  // Fix round 5: the reload handler did `beginFreshLoad()` + `setRemountKey`
+  // and stopped there, while Retry — the same event, a user-initiated fresh
+  // start — also cleared `errorCode` and every ladder counter. So logging out
+  // from the error screen left "something went wrong" covering a healthy,
+  // freshly rotated page, with Retry as the only apparent way forward on a
+  // page that was already fine. Both paths now run the SAME `restartLoad`.
+  Mentiora.configure(cfg);
+  await render(<MentioraWidget {...cfg} />);
+  await driveCrashLadderToExhaustion();
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
+
+  await act(async () => {
+    await Mentiora.logout();
+  });
+
+  expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
+  // Not just "the surface is gone": the page under it is a real, working one.
+  expect(await handshakeInstallId(screen.getByTestId('mentiora-webview'))).toEqual(
+    expect.any(String),
+  );
+});
+
 test('an inline widget unsubscribes from runtime.onReload on unmount', async () => {
   Mentiora.configure(cfg);
   const rt = getRuntime(cfg);

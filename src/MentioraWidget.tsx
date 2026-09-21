@@ -450,28 +450,27 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // memoises per key and only swaps `runtime.identity` in place), so this
   // resubscribes only if the embed key itself changes, never on every render.
   //
-  // `beginFreshLoad()` FIRST, exactly as `onRetry` does before its identical
-  // `setRemountKey` (fix round 4, Critical 1): a remount is a new top-level
-  // load, and without the boundary `peer.resetLoad()` never runs — the fresh
-  // page's `initialize` takes `-32600 "initialize already completed for this
-  // page load"` (the latch is still set), that rejection is stamped with the
-  // PRE-LOGOUT session key, which `currentSessionKey` still holds and the
-  // peer still authorizes, and a stale `backHeld` + non-null session key make
-  // `onHardwareBack` claim back presses into the post-logout page — the exact
-  // Modal trap fix round 3 closed. Every other remount in this file already
-  // goes through a boundary (`onRetry`, `scheduleRecovery`, the watchdog);
-  // this one skipped it. Reached through a ref (assigned where
-  // `beginFreshLoad` is defined, below) rather than captured directly, so
-  // this effect keeps depending on `runtime` alone — a plain capture would
-  // make `beginFreshLoad`, rebuilt every render, a dependency and resubscribe
-  // the reload listener on every single render.
+  // A logout is THE SAME EVENT Retry is — a user-initiated fresh start for
+  // this widget — so it runs the same `restartLoad` (fix round 5), not a
+  // hand-rolled subset of it. Fix round 4 gave this path the load boundary it
+  // was missing (Critical 1: without `peer.resetLoad()` the fresh page's
+  // `initialize` takes `-32600 "initialize already completed for this page
+  // load"`, that rejection is stamped with the PRE-LOGOUT session key, and a
+  // stale `backHeld` plus that still-authorized key let `onHardwareBack`
+  // claim back presses into the post-logout page); round 5 gave it the other
+  // two things Retry does, for the same reason — see `restartLoad` below.
+  //
+  // Reached through a ref (declared here, assigned below once `restartLoad`
+  // exists) rather than captured directly, so this effect keeps depending on
+  // `runtime` alone — a plain capture would make `restartLoad`, rebuilt every
+  // render, a dependency and resubscribe the reload listener on every render.
   useEffect(() => {
-    return runtime.onReload(() => {
-      freshLoad.current();
-      setRemountKey((k) => k + 1);
-    });
+    return runtime.onReload(() => restart.current());
   }, [runtime]);
-  const freshLoad = useRef<() => void>(() => {});
+  /** Assigned during render, further down, right after `restartLoad` is
+   *  defined — the effect above runs after commit, so it always calls a real
+   *  function, never this placeholder. */
+  const restart = useRef<() => void>(() => {});
 
   const generation = useRef(0);
   // Has THIS generation already had its one terminal callback? Shared across
@@ -560,11 +559,6 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     advanceGeneration();
     armWatchdog();
   };
-  // For the `runtime.onReload` effect above, which must not depend on this
-  // function's per-render identity. Only refs and the stable `peer` are read
-  // inside it, so "the latest one" and "the first one" behave identically —
-  // the ref is about dependency hygiene, not staleness.
-  freshLoad.current = beginFreshLoad;
 
   /** Schedules the ladder's own reload/remount `delayMs` from now, tagged to
    *  the CURRENT generation. When it fires, it advances the generation itself
@@ -663,8 +657,26 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *  `reload()`: `renderer_crashed` can be what's showing, and `reload()` on
    *  a renderer Android already killed is not a repair, it's the same dead
    *  instance asked to do the one thing Android's own docs say it cannot —
-   *  a remount is correct for every code, not just that one. */
-  const onRetry = (): void => {
+   *  a remount is correct for every code, not just that one.
+   *
+   *  Two callers, deliberately the same function (fix round 5): the error
+   *  screen's Retry button, and `runtime.onReload` (i.e. `Mentiora.logout()`).
+   *  A logout is at least as much a fresh start as Retry — a different user,
+   *  a rotated install id, a page loaded from scratch — so every piece of
+   *  this applies to it:
+   *  - `setErrorCode(null)`: without it, logging out while the error surface
+   *    is up leaves "something went wrong" covering a healthy, freshly
+   *    rotated page until the user happens to press Retry, which is the one
+   *    control that looks like the only way forward on a page that is
+   *    already fine. That was the user-visible bug this round fixed.
+   *  - the three counters: leaving them would be a half fresh start — the
+   *    post-logout page would inherit the previous user's spent budget and
+   *    could go straight back to the error surface on its first hiccup, with
+   *    no silent recovery, which is precisely the state the line above just
+   *    cleared. (A successful `initialize` resets all three anyway, so this
+   *    only ever matters for a post-logout page that itself struggles —
+   *    exactly the case where inheriting is worst.) */
+  const restartLoad = (): void => {
     networkFailures.current = 0;
     crashFailures.current = 0;
     handshakeTimeouts.current = 0;
@@ -672,6 +684,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     setRemountKey((k) => k + 1);
     setErrorCode(null);
   };
+  restart.current = restartLoad;
 
   /** The only exit from a screen the user reached because the page never drew
    *  its own close control — it must work even when the peer, the runtime and
@@ -901,7 +914,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
           <ErrorScreen
             strings={props.strings}
             code={errorCode}
-            onRetry={onRetry}
+            onRetry={restartLoad}
             onDismiss={onDismiss}
           />
         </View>
