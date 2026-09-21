@@ -388,17 +388,26 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
               live.installId(randomSource.bytes),
               live.identity.initial(),
             ]);
-            // A page that gets THIS FAR is proof of life for every ladder, not
-            // just the watchdog's — so a transient blip long ago does not count
-            // against a page that has since loaded cleanly. Reset here, on the
-            // success path, and never at the top of the handler: a handler that
-            // is about to reject has proved nothing, and zeroing the watchdog's
-            // own counter on the way to failing turns the catch below into an
-            // unbounded reload loop rather than the one-reload-then-error path
-            // it hands the incident to.
+            // A page that gets THIS FAR is proof that the TRANSPORT works, so a
+            // transient blip long ago does not count against a page that has
+            // since loaded cleanly — the network counter and the watchdog
+            // counter reset. Reset here, on the success path, and never at the
+            // top of the handler: a handler about to reject has proved nothing,
+            // and zeroing the watchdog's own counter on the way to failing
+            // turns the catch below into an unbounded reload loop rather than
+            // the one-reload-then-error path it hands the incident to.
+            //
+            // `crashFailures` deliberately does NOT reset (branch review, M1).
+            // A handshake is not proof the renderer will survive, and §2.5's
+            // bound exists for `react-native-webview`#1767 — a page that
+            // crashes deterministically. Such a page boots fine and dies later,
+            // when it renders the thread, so it would clear its own crash
+            // budget on the way past on every cycle and the bound would not
+            // exist for exactly the page it was written for: an unbounded
+            // remount-plus-full-page-load loop, forever, on battery. `Retry`
+            // (`restartLoad`) is the explicit way to buy a fresh crash budget.
             if (generation.current === myGen) {
               networkFailures.current = 0;
-              crashFailures.current = 0;
               handshakeTimeouts.current = 0;
             }
             // Never `-32005`, whatever version the page asked for: we answer our

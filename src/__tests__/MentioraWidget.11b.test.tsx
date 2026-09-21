@@ -413,3 +413,27 @@ test('a reload while the random round trip is parked does not poison the next ha
     Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
   }
 });
+
+// Branch review, M1. §2.5 bounds crash recovery BECAUSE of
+// `react-native-webview`#1767: a page that crashes deterministically. Such a
+// page boots fine and dies later, when it renders the thread — so a
+// `crashFailures` reset inside the `initialize` handler is spent on every
+// cycle and the bound never applies to the one page it was written for. The
+// test above ("Retry recovers a dead renderer") drives four crashes with NO
+// handshake between them, which is why it could not see this.
+//
+// Catches the single-line re-addition of `crashFailures.current = 0` to the
+// `initialize` handler: with it, the loop below never reaches the cap and no
+// error event is ever emitted.
+test('a clean handshake between crashes does not buy a fresh crash budget', async () => {
+  const onEvent = jest.fn();
+  await mount(onEvent);
+  for (let i = 0; i < 4; i++) {
+    const el = screen.getByTestId('mentiora-webview');
+    await initialize(el); // every cycle boots cleanly, then the renderer dies
+    await fireEvent(el, 'renderProcessGone', { nativeEvent: { didCrash: true } });
+    await advance(9000);
+  }
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'renderer_crashed' });
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
+});
