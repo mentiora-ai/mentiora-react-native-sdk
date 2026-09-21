@@ -217,3 +217,37 @@ test("a later mint, after logout, invokes that call's own source rather than an 
     "Y's bytes must come back — a capture-once-per-entry mutant would return X's instead",
   );
 });
+
+// Branch review, M5. Deleting `await runtime.identity.clear()` from `logout()`
+// left the whole suite green: the presenter's logout tests check the install
+// id only, and "logout rotates and clears identity" above asserts the rotation
+// and the subscriber, never the identity half. A refactor that dropped that
+// line would ship green, leaving the previous user's `wasSignedIn` flag set on
+// a now-anonymous install — which `identity.ts`'s `initial()` turns into a
+// hard handshake failure on the next boot (§2.3), i.e. a device that can no
+// longer open the widget at all.
+test('logout clears identity too, not only the install id', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  const removed: string[] = [];
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      removed.push(k);
+      store.delete(k);
+    },
+  };
+  store.set(wasSignedInKey('k'), '1'); // this install has held a token before
+
+  const rt = getRuntime({ ...cfg('k'), storage, identity: { getToken: () => 'tok' } });
+  await rt.logout();
+
+  assert.ok(
+    removed.includes(wasSignedInKey('k')),
+    'the flag must go with the user; left set on a rotated, anonymous install it deadlocks the next boot',
+  );
+  assert.equal(store.get(wasSignedInKey('k')), undefined);
+});

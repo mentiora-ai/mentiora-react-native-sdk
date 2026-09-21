@@ -252,3 +252,60 @@ test('a failed wasSignedIn flag write does not fail an otherwise-successful boot
     'the caller already has a token; a flag-write failure is not its problem',
   );
 });
+
+// Branch review, M5. Two design-level invariants (§2.3, §2.4) with no
+// assertion anywhere: "can a token outlive a logout" and "the token never
+// touches storage". Both mutations were fully green.
+
+test('clear drops the cached token too, so the next user never inherits it', async () => {
+  // The fetcher shape, because that is the only one with a reuse window at
+  // all (`refresh()` on a `getToken` provider always re-calls, so the same
+  // test written against it would pass with the cache left fully intact).
+  const now = 1_000_000_000_000;
+  let hits = 0;
+  const p = make({
+    identity: { endpoint: 'https://x/y' },
+    now: () => now,
+    fetchImpl: (async () => {
+      hits++;
+      return {
+        ok: true,
+        json: async () => ({ token: jwt(now / 1000 + 3600) }),
+      } as unknown as Response;
+    }) as typeof fetch,
+  });
+  await p.initial();
+  await p.refresh(); // an hour left, far outside the 5-minute floor: served from cache
+  assert.equal(hits, 1, 'precondition: there IS a live cache to clear');
+
+  await p.clear();
+
+  await p.refresh();
+  assert.equal(hits, 2, 'a token cached before a logout must never be handed to the next user');
+});
+
+test('the only value ever written under the wasSignedIn key is the flag, never the token', async () => {
+  // §2.3: "The token lives in memory only. It is never written to storage or
+  // logged." Nothing asserted that, and `assert.ok(m.get(...))` above is
+  // truthy for a JWT just as happily as for '1'.
+  const { m, storage } = memory();
+  const written: string[] = [];
+  const watched: MentioraStorage = {
+    ...storage,
+    setItem: async (k, v) => {
+      if (k === wasSignedInKey('k')) written.push(v);
+      await storage.setItem(k, v);
+    },
+  };
+  const token = jwt(2000000000);
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage: watched,
+    identity: { getToken: () => token },
+  });
+  await p.initial();
+  await p.refresh();
+
+  assert.deepEqual(written, ['1', '1']);
+  assert.ok(![...m.values()].includes(token), 'the token must never reach storage');
+});
