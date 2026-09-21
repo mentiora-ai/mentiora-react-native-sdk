@@ -13,6 +13,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
+import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
 
@@ -356,4 +357,59 @@ test('an initialize handler that rejects ends at the error surface, not a dead w
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
   expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
   expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
+});
+
+// Branch review, C3 — the WIRING of `randomSource.reset()` into
+// `advanceGeneration`, which is the half `random.test.ts` cannot see. Without
+// host WebCrypto (React Native's real state, no polyfill) the session key
+// comes from a round trip to the page, and `random.ts` allows exactly one in
+// flight. A page that asks and is then replaced leaves that slot held for the
+// rest of its 2s timeout, so the REPLACEMENT page's `initialize` — the
+// recovery handshake — takes `-32603` on its first line.
+//
+// Catches the single-line deletion of `randomSource.reset()` from
+// `advanceGeneration()`: without it page B is answered an error instead of a
+// result.
+test('a reload while the random round trip is parked does not poison the next handshake', async () => {
+  const realCrypto = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
+  try {
+    const el = await mount();
+    await initialize(el); // page A parks a bytes() request that can never be answered
+    await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
+    // The network ladder's first delay is jittered 0-1000ms; this is past it,
+    // and well short of the round trip's own 2s timeout — so the slot is still
+    // held at the moment the load boundary runs.
+    await advance(1500);
+    expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
+
+    // Page B, the reloaded document. Two replies: one for the session key, one
+    // for the install id this first launch still has to mint.
+    await fireEvent(el, 'message', {
+      nativeEvent: {
+        data: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'b1',
+          method: 'mentiora/initialize',
+          params: { protocolVersion: 1 },
+        }),
+      },
+    });
+    for (let i = 0; i < 2; i++) {
+      await fireEvent(el, 'message', {
+        nativeEvent: {
+          data: JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(4) }),
+        },
+      });
+    }
+
+    const answer = sent().find((m) => m.id === 'b1');
+    expect(answer).toBeDefined();
+    expect(answer?.error).toBeUndefined();
+    expect((answer?.result as { sessionKey?: string } | undefined)?.sessionKey).toEqual(
+      expect.any(String),
+    );
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
+  }
 });

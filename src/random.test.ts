@@ -104,3 +104,46 @@ test('a throwing globalCrypto rejects instead of throwing synchronously', async 
   });
   await assert.rejects(src.bytes(16), /broken polyfill/);
 });
+
+// design.md §2.2: "A reset invalidates every in-flight `receive` AND every
+// parked random-bytes resolver." The second half had no implementation at all
+// (branch review, C3): a request parked by a document that has since been
+// replaced holds the single-in-flight slot for its full 2 s timeout, and the
+// replacement page's `initialize` is rejected on its first line.
+test('reset frees the single-in-flight slot for the replacement page', async () => {
+  let cleared = 0;
+  const src = createRandomSource({
+    inject: () => {},
+    setTimer: () => 'timer',
+    clearTimer: () => {
+      cleared++;
+    },
+  });
+  const parked = src.bytes(16); // the dead document's request
+  src.reset();
+  await assert.rejects(parked, /superseded/);
+  assert.equal(cleared, 1, "the dead request's 2s timer must not outlive it");
+
+  // The whole point: the NEXT page may ask, rather than taking
+  // "already in flight" and failing its handshake.
+  const fresh = src.bytes(16);
+  assert.equal(
+    src.acceptReply(JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(3) })),
+    true,
+  );
+  assert.equal((await fresh)[0], 3);
+});
+
+test('reset with nothing parked is a no-op, not a spurious rejection', async () => {
+  const src = createRandomSource({
+    inject: () => {},
+    globalCrypto: {
+      getRandomValues: (a) => {
+        a.fill(1);
+        return a;
+      },
+    },
+  });
+  src.reset();
+  assert.equal((await src.bytes(16))[0], 1);
+});

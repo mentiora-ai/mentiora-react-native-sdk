@@ -556,6 +556,14 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     // C1). The page re-claims it with a fresh `mentiora/backHandling` if it
     // still wants it.
     backHeld.current = false;
+    // design.md §2.2, verbatim: "A reset invalidates every in-flight `receive`
+    // AND every parked random-bytes resolver." `peer.resetLoad()` is the first
+    // half; this is the second. Without it a `bytes()` left pending by the
+    // dead document holds the single-in-flight slot for the rest of its 2 s
+    // timeout, and the replacement page's `initialize` is rejected on its very
+    // first line — the recovery handshake poisoned by the load boundary that
+    // was supposed to produce it (branch review, C3).
+    randomSource.reset();
     generation.current += 1;
     handled.current = false;
     clearRecoveryTimer();

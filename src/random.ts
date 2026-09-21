@@ -22,6 +22,15 @@ export type RandomSource = {
   bytes: (count: number) => Promise<Uint8Array>;
   /** Called by the component's onMessage router BEFORE the JSON-RPC parser. */
   acceptReply: (raw: string) => boolean;
+  /** A load boundary invalidates the parked resolver, if any (design.md §2.2:
+   *  "A reset invalidates every in-flight `receive` AND every parked
+   *  random-bytes resolver"). The request belongs to a document that no
+   *  longer exists and its reply can never arrive, but `pending` would stay
+   *  non-null for the rest of its 2 s timeout — and the replacement page's
+   *  `initialize` hits "already in flight" on its very first line and is
+   *  answered `-32603`, poisoning the one handshake that was supposed to be
+   *  the recovery (branch review, C3). */
+  reset: () => void;
 };
 
 export const RANDOM_REPLY_TAG = '__mentiora_random__';
@@ -126,7 +135,15 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     return true;
   };
 
-  return { bytes, acceptReply };
+  const reset = (): void => {
+    const current = pending;
+    if (!current) return;
+    pending = null;
+    clearTimer(current.timer);
+    current.reject(new Error('random bytes request superseded by a load boundary'));
+  };
+
+  return { bytes, acceptReply, reset };
 };
 
 const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
