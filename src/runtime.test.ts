@@ -292,3 +292,73 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
     "the previous user's install id must not survive the logout that rotated it",
   );
 });
+
+// Re-review, N1 — a regression the m5 fix introduced. `rotation` used to be
+// assigned the rotation promise ITSELF and cleared only on the line AFTER the
+// await, so a `removeItem` that rejected left it pointing at a rejected
+// promise forever: every later `installId()` parked behind it and re-threw a
+// failure that was long over. Through the `initialize` handler's catch that is
+// an error screen the user cannot get past, for the life of the process.
+//
+// Two tests, because the repair is two independent lines and each one alone is
+// enough to stop the permanent case — so a single test passes under either
+// mutation and proves nothing. They split by WHEN the mint arrives.
+const failingRotation = () => {
+  const store = new Map<string, string>();
+  let failRemove = true;
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      if (failRemove) throw new Error('disk full');
+      store.delete(k);
+    },
+  };
+  return {
+    storage,
+    heal: () => {
+      failRemove = false;
+    },
+  };
+};
+
+// Catches `rotation = rotating` in place of `rotation = rotating.catch(() =>
+// undefined)`: a mint that parked before the `finally` ran inherits the
+// rotation's failure.
+test('a mint landing DURING a failing logout does not inherit the failure', async () => {
+  __resetRuntimes();
+  const { storage } = failingRotation();
+  const rt = getRuntime({ ...cfg('poison-concurrent'), storage });
+  const before = await rt.installId(bytes);
+
+  const loggingOut = rt.logout(); // not awaited: we want the window it opens
+  const racing = rt.installId(bytes); // parks on `rotation`, whatever it is
+
+  await assert.rejects(loggingOut, /disk full/, 'the failure must still reach the caller');
+  assert.equal(
+    await racing,
+    before,
+    'the rotation never landed, so the id is unchanged — the mint is not broken',
+  );
+});
+
+// The direct N1 repro: the pre-fix form (`rotation = rotating`, cleared on the
+// line after the await) left `rotation` a rejected promise forever, so every
+// LATER mint re-threw a failure that was over. Fails under that form.
+test('a removeItem failure during logout does not poison every later install-id mint', async () => {
+  __resetRuntimes();
+  const { storage, heal } = failingRotation();
+  const rt = getRuntime({ ...cfg('poison-later'), storage });
+  const before = await rt.installId(bytes);
+
+  await assert.rejects(rt.logout(), /disk full/);
+
+  heal(); // the disk is fine again
+  assert.equal(await rt.installId(bytes), before);
+  // The second and third calls too: a one-shot rejected promise would satisfy
+  // a single retry by accident.
+  assert.equal(await rt.installId(bytes), before);
+  assert.equal(await rt.installId(bytes), before);
+});

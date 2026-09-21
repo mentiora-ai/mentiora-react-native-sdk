@@ -123,9 +123,27 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       // first await, so it is already visible to anything that calls
       // `installId()` after `logout()` returns its promise.
       inFlight = undefined;
-      rotation = rotateInstallId({ storage, embedKey });
-      await rotation;
-      rotation = undefined;
+      const rotating = rotateInstallId({ storage, embedKey });
+      // What mints park on is deliberately NOT `rotating` itself. They need to
+      // wait for the rotation to finish; they must not inherit its failure. A
+      // `removeItem` that rejects (a full or corrupt SQLite file under
+      // AsyncStorage, or anything a customer `storage` override does) would
+      // otherwise leave `rotation` pointing at a rejected promise that every
+      // later `installId()` re-throws — for the life of the process, long
+      // after the disk recovered, and through the initialize handler's catch
+      // that is an error screen the user cannot get past.
+      //
+      // The `.catch` is the line that fixes it; the `finally` is redundant
+      // given it (a permanently-resolved `rotation` costs a microtask per
+      // mint and nothing else) and no test can distinguish the two. It stays
+      // because releasing the slot on the failing path is what keeps the
+      // `.catch` from being load-bearing on its own.
+      rotation = rotating.catch(() => undefined);
+      try {
+        await rotating;
+      } finally {
+        rotation = undefined;
+      }
       // clear() rejects if the wasSignedIn flag removal fails. Rotate first,
       // then clear: if clear() throws, the install id is already anonymous
       // (rotated), so the flag is the only thing left inconsistent, and the
