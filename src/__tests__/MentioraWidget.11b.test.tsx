@@ -11,7 +11,7 @@
 // timer's callback would fire but its own internal awaits would never
 // resolve within the same synchronous tick.
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { __lastWebView, __resetWebViews } from '../../__mocks__/react-native-webview';
+import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
@@ -138,6 +138,75 @@ test('a network-ladder reload that never re-initializes still gets caught by the
   expect(__lastWebView().reload).toHaveBeenCalledTimes(2);
   await advance(8000);
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});
+
+test('unmounting cancels the live watchdog — no reload, no error event, for a widget the host already closed', async () => {
+  const onEvent = jest.fn();
+  const view = await render(
+    <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />,
+  );
+  // Captured before unmount: the mock unregisters itself from `__webViews()` on
+  // unmount (`__lastWebView()` would throw afterward), but this `jest.fn()`
+  // reference is still good — it's how we can tell whether the OLD instance
+  // was asked to reload after the widget was torn down.
+  const { reload } = __lastWebView();
+  await view.unmount();
+  // Without the cleanup effect, the mount-armed watchdog is still ticking:
+  // `beginFreshLoad()` fires at 8s (harmless on its own — `webview.current` is
+  // already null post-unmount, so its own `reload()` call is a no-op), but the
+  // SECOND watchdog it re-arms fires at 16s and calls `showError`, which calls
+  // the host's `onEvent` regardless of mount state — `latest.current` is a
+  // plain ref, not tied to the React tree.
+  await advance(20000);
+  expect(reload).not.toHaveBeenCalled();
+  expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});
+
+test('Retry recovers a dead renderer — a remount, not a reload() on the corpse', async () => {
+  const onEvent = jest.fn();
+  await mount(onEvent);
+  for (let i = 0; i < 4; i++) {
+    await fireEvent(screen.getByTestId('mentiora-webview'), 'renderProcessGone', {
+      nativeEvent: { didCrash: true },
+    });
+    await advance(9000);
+  }
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'renderer_crashed' });
+  // The instance whose renderer Android already killed — Android's own docs
+  // say a dead instance must be removed from the hierarchy and destroyed,
+  // never reused, so the only correct repair is a fresh one, not a `.reload()`
+  // call on this one.
+  const deadWebView = __lastWebView();
+  await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.retry }));
+  expect(__webViews()).toHaveLength(1); // the dead one unregistered, exactly one replaced it
+  expect(__webViews()[0]).not.toBe(deadWebView);
+  expect(deadWebView.reload).not.toHaveBeenCalled();
+});
+
+test('the error overlay is modal to a screen reader — both flags flip with errorCode', async () => {
+  // No `getByProps`-style query in this RNTL version — `queryAll` with a
+  // predicate is the same escape hatch `test-renderer` itself offers, used
+  // here only because neither flag has any other query surface (no text, no
+  // role, no testID) to find them by.
+  const modalOverlays = () =>
+    screen.container.queryAll((i) => i.props.accessibilityViewIsModal === true);
+
+  const el = await mount();
+  expect(el.props.importantForAccessibility).toBe('auto');
+  expect(modalOverlays()).toHaveLength(0);
+  for (let i = 0; i < 3; i++) {
+    await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
+    await advance(9000);
+  }
+  // A screen reader must not be able to reach the dead page behind the one
+  // exit screen this widget owns: Android hides the WebView subtree from
+  // TalkBack, and iOS marks the overlay modal for VoiceOver. Read straight off
+  // `el` (same instance throughout — the network ladder only ever calls
+  // `.reload()`, never a remount), not `getByTestId`: RNTL's default queries
+  // exclude an element with `importantForAccessibility="no-hide-descendants"`
+  // on ITSELF as "hidden", which is exactly the prop under test here.
+  expect(el.props.importantForAccessibility).toBe('no-hide-descendants');
+  expect(modalOverlays()).toHaveLength(1);
 });
 
 test('onRenderProcessGone remounts up to 3 times then gives up', async () => {

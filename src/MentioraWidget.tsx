@@ -61,10 +61,14 @@
  *   exactly the trap this screen exists to prevent, reached through the
  *   recovery path that is supposed to prevent it. `onLoadEnd` has no such
  *   platform gap. The one exception is the watchdog's OWN self-triggered
- *   reload, which still re-arms itself immediately (`beginFreshLoad`) rather
- *   than waiting on `onLoadEnd` — its contract is "one silent reload, then
+ *   reload, which re-arms itself immediately (`beginFreshLoad`) rather than
+ *   waiting on `onLoadEnd` first — its contract is "one silent reload, then
  *   an unconditional recheck in 8s", not "whenever this reload happens to
- *   finish".
+ *   finish". That immediate arm is not the only one: on a real device this
+ *   same reload later fires its own `onLoadEnd` too, which re-arms again and
+ *   supersedes it. No leak either way — `armWatchdog` clears any existing
+ *   timer before setting a new one — and the second arm only ever gives the
+ *   page more time to speak than the immediate one alone would, never less.
  * - A valid `initialize` clears the watchdog SYNCHRONOUSLY (the first line of
  *   the `initialize` handler below, before any `await`) — not in an effect,
  *   not after the round trip for the session-key bytes completes.
@@ -362,12 +366,16 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *  `onLoadEnd` (the real, platform-uniform re-arm point — see the header
    *  comment for why a network/crash reload's own `reload()`/remount call
    *  must NOT arm this directly), and from the watchdog's own single
-   *  self-triggered reload (which re-arms itself immediately rather than
-   *  waiting on that reload's own `onLoadEnd`, because its contract is "one
-   *  silent reload, then an unconditional recheck in 8s"). A network/crash
-   *  reload still goes through `advanceGeneration`, so the watchdog that was
-   *  ticking for the load that just failed is cancelled — just not replaced
-   *  until that reload's `onLoadEnd` arrives. */
+   *  self-triggered reload, which re-arms itself immediately rather than
+   *  waiting on that reload's own `onLoadEnd` first — its contract is "one
+   *  silent reload, then an unconditional recheck in 8s". That immediate arm
+   *  is not the last word: the same reload's own `onLoadEnd`, once it fires,
+   *  re-arms again and supersedes it, harmlessly (this function always
+   *  clears any existing timer first) and only ever more patiently, never
+   *  less. A network/crash reload still goes through `advanceGeneration`, so
+   *  the watchdog that was ticking for the load that just failed is
+   *  cancelled — just not replaced until that reload's own `onLoadEnd`
+   *  arrives. */
   const armWatchdog = (): void => {
     clearWatchdogTimer();
     const gen = generation.current;
