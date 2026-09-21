@@ -5,7 +5,12 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { BackHandler, Platform, StatusBar } from 'react-native';
 import { __lastWebView, __resetWebViews } from '../../__mocks__/react-native-webview';
-import { __resolveHostInsetsForTest, MentioraWidget } from '../MentioraWidget';
+import {
+  __hasValidInsetsForTest,
+  __loadSafeAreaInsetsForTest,
+  __resolveHostInsetsForTest,
+  MentioraWidget,
+} from '../MentioraWidget';
 import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
@@ -120,27 +125,43 @@ test('back is unhandled by default — the page never claimed it', async () => {
 
 test('the BackHandler subscription is removed with .remove(), not removeEventListener', async () => {
   const remove = jest.fn();
+  // `jest.setup.ts` assigns `BackHandler.addEventListener` as a plain
+  // `jest.fn(...)` (a property overwrite, not a real method) — `jest.spyOn`
+  // on a target that is ALREADY a mock function does not wrap it in a new
+  // one; it hands back that SAME reference, so `.mockReturnValue` here
+  // mutates jest.setup's shared mock in place, and its `.mockRestore()`
+  // does not bring back jest.setup's own implementation (there is no
+  // separate "original" layer to restore to) — it resets to a generic
+  // mock with no return value at all, which the next test to mount a
+  // `MentioraWidget` and read the returned subscription's `.remove()`
+  // would crash on. Reassigning a fresh, working `jest.fn()` — the exact
+  // shape jest.setup.ts itself assigns — in `finally` is what actually
+  // undoes this, `jest.config.js` having no `restoreMocks` (confirmed by
+  // running this file with and without the reassignment).
   const add = jest
     .spyOn(BackHandler, 'addEventListener')
     .mockReturnValue({ remove } as unknown as ReturnType<typeof BackHandler.addEventListener>);
-  const view = await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />);
-  expect(add).toHaveBeenCalledWith('hardwareBackPress', expect.any(Function));
-  await view.unmount();
-  expect(remove).toHaveBeenCalledTimes(1);
-  // `removeEventListener` was deleted in RN 0.77 and calling it throws — the
-  // component must never reach for it.
-  expect((BackHandler as Record<string, unknown>).removeEventListener).toBeUndefined();
+  try {
+    const view = await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />);
+    expect(add).toHaveBeenCalledWith('hardwareBackPress', expect.any(Function));
+    await view.unmount();
+    expect(remove).toHaveBeenCalledTimes(1);
+    // `removeEventListener` was deleted in RN 0.77 and calling it throws — the
+    // component must never reach for it.
+    expect((BackHandler as Record<string, unknown>).removeEventListener).toBeUndefined();
+  } finally {
+    BackHandler.addEventListener = jest.fn(() => ({ remove: jest.fn() }));
+  }
 });
 
 // Resolution 5 ("back must not become a second way to be trapped"): the page
 // claims the button, then a network incident resets the session key
 // underneath it (11b's own ladder) with nothing ever telling us the button
 // was released. `peer.sessionKey()`, re-checked at PRESS TIME, is what
-// unblocks back once that reset has happened — not a separate `errorCode`
-// check (tried first, then removed: every reachable way `errorCode` becomes
-// non-null already has `sessionKey() === null` by then, given 11b's own
-// "reset every ladder on a successful handshake" rule, so it never once
-// failed under mutation — see the doc comment on `onHardwareBack`).
+// unblocks back once that reset has happened for the network/crash ladders
+// — but NOT for the handshake watchdog's own give-up branch, which is why
+// `onHardwareBack` also checks `dismissed`/`errorCode` first (see the
+// mutation-critical test below, and the doc comment on `onHardwareBack`).
 test('a stale hold intercepts once more before the ladder resets the session key (a known, bounded gap)', async () => {
   const el = await mount();
   await handshake(el);
@@ -166,6 +187,43 @@ test("once the ladder's own reload resets the session key, a stale hold no longe
   }
 });
 
+// MUTATION-CRITICAL: the handshake watchdog's own give-up branch
+// (`armWatchdog`'s `else { showError('handshake_timeout') }`) calls
+// `showError` directly, with NO `advanceGeneration` of its own — unlike
+// every other terminal branch in 11b. The peer's `initializeLatch` and
+// session key are therefore untouched, so a SLOW page (a cold start past
+// two 8s watchdog cycles is ordinary, not exotic) can still complete
+// `initialize` — the WebView deliberately stays mounted under the overlay
+// for exactly this reason, so Retry has something to retry — and be handed
+// a live session key AFTER the error surface is already showing. If that
+// late page then claims the button, `peer.sessionKey() !== null` alone
+// would forward every later back press to a page hidden behind
+// `importantForAccessibility="no-hide-descendants"`, with nothing left to
+// ever release it (the watchdog is already spent: `HANDSHAKE_RECOVERY_CAP`
+// is 1). `dismissed`/`errorCode`, checked FIRST in `onHardwareBack`, are
+// what prevent this — this test is the one a mutation deleting that check
+// must fail.
+test('a late handshake after handshake_timeout must not let backHandling trap the user', async () => {
+  jest.useFakeTimers();
+  try {
+    const el = await mount();
+    // First watchdog timeout: one silent, unconditional reload (generation
+    // DOES advance here — this is the recovery branch, not the give-up one).
+    await act(async () => jest.advanceTimersByTimeAsync(8000));
+    // Second watchdog timeout, on the new generation: the cap (1) is
+    // exceeded, so this is the give-up branch — `showError` with no
+    // `advanceGeneration`.
+    await act(async () => jest.advanceTimersByTimeAsync(8000));
+    expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
+    // The slow page finally speaks, well after the error surface appeared.
+    await handshake(el);
+    await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
+    expect(pressBack()).toBe(false);
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('insets are set from safe-area-context when present', async () => {
   await mount();
   const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
@@ -176,7 +234,13 @@ test('insets are set from safe-area-context when present', async () => {
 });
 
 test('we never claim reportsViewport — the page tracks visualViewport itself', async () => {
-  await mount();
+  // The only realistic place this SDK would ever claim `reportsViewport` is
+  // inside the `initialize` result (the one message shaped like a capability
+  // announcement) — a mount-only check never produces or inspects that
+  // message at all, so it would pass unchanged even if a future edit added
+  // the claim there. Handshake first.
+  const el = await mount();
+  await handshake(el);
   const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
     ([s]) => s as string,
   );
@@ -184,15 +248,24 @@ test('we never claim reportsViewport — the page tracks visualViewport itself',
 });
 
 test('the react-native-safe-area-context peer, when installed, is what sets the inset values', async () => {
-  // Exercises the file's default "present" mock (top of file) — the actual
-  // numbers it supplies (44/1/34/2), not just the property name, prove this
-  // path (not the Android fallback, not "nothing") is what ran.
+  // Exercises the file's default "present" mock (top of file): all FOUR
+  // sides, each asserted as its own exact `setProperty(name, "Npx")` call —
+  // not just "44px and 34px appear somewhere", which an implementation that
+  // swaps top<->bottom (or never sets right/left at all) would pass
+  // identically. That swap is the literal "chat mislaid under the notch"
+  // failure this property exists to prevent.
   await mount();
   const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
     ([s]) => s as string,
   );
-  expect(injected.some((s) => s.includes('44px'))).toBe(true);
-  expect(injected.some((s) => s.includes('34px'))).toBe(true);
+  const setsProperty = (name: string, px: number): boolean =>
+    injected.some((s) =>
+      s.includes(`setProperty(${JSON.stringify(name)}, ${JSON.stringify(`${px}px`)})`),
+    );
+  expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
+  expect(setsProperty('--mw-host-inset-right', 1)).toBe(true);
+  expect(setsProperty('--mw-host-inset-bottom', 34)).toBe(true);
+  expect(setsProperty('--mw-host-inset-left', 2)).toBe(true);
 });
 
 // The next two exercise `resolveHostInsets`'s OWN branch logic directly
@@ -236,6 +309,54 @@ test('with neither the peer nor Android, nothing is measurable — null, not a f
   }
 });
 
+test('a malformed peer measurement (a shape mismatch, not just absence) is rejected, not interpolated', () => {
+  // Interpolating an `undefined`/non-numeric field straight into `${px}px`
+  // produces a syntactically VALID custom-property token ("undefinedpx"),
+  // so nothing throws — the page's own `max(env(...), var(--mw-host-inset-*))`
+  // then fails at computed-value time and drops the whole padding
+  // declaration, worse than never setting the property. `hasValidInsets`
+  // (inside `loadSafeAreaInsets`, not `resolveHostInsets`) is the guard.
+  expect(__hasValidInsetsForTest({ top: 44, right: 1, bottom: 34, left: 2 })).toBe(true);
+  expect(
+    __hasValidInsetsForTest({
+      top: undefined as unknown as number,
+      right: 1,
+      bottom: 34,
+      left: 2,
+    }),
+  ).toBe(false);
+  expect(__hasValidInsetsForTest({ top: Number.NaN, right: 1, bottom: 34, left: 2 })).toBe(false);
+  expect(
+    __hasValidInsetsForTest({
+      top: 'not a number' as unknown as number,
+      right: 1,
+      bottom: 34,
+      left: 2,
+    }),
+  ).toBe(false);
+});
+
+test('a malformed peer measurement is rejected by loadSafeAreaInsets ITSELF, not only by the predicate', () => {
+  // `hasValidInsets` being correct in isolation does not prove
+  // `loadSafeAreaInsets` actually CALLS it — a mutation deleting that one
+  // call site is invisible to the test above, which never goes through
+  // `loadSafeAreaInsets` at all. `requireModule` is the seam that lets this
+  // one exercise the real wiring instead.
+  const malformed = () => ({
+    initialWindowMetrics: { insets: { top: undefined, right: 1, bottom: 34, left: 2 } },
+  });
+  expect(__loadSafeAreaInsetsForTest(() => true, malformed as () => unknown)).toBeNull();
+  const wellFormed = () => ({
+    initialWindowMetrics: { insets: { top: 44, right: 1, bottom: 34, left: 2 } },
+  });
+  expect(__loadSafeAreaInsetsForTest(() => true, wellFormed as () => unknown)).toEqual({
+    top: 44,
+    right: 1,
+    bottom: 34,
+    left: 2,
+  });
+});
+
 // Add-on from 11b's review: `strings` existed on `ErrorScreen` (Task 10) but
 // had no way to reach it from the public config — `MentioraWidgetProps` had
 // no `strings` field, so a host override was dead on arrival.
@@ -252,6 +373,16 @@ test('a strings override on the public config reaches the rendered error screen'
     }
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
+    // The per-key merge in `ErrorScreen` (Task 10) is what makes a PARTIAL
+    // override safe — a regression collapsing it to a plain
+    // `{ ...DEFAULT_STRINGS, ...strings }` spread would behave identically
+    // for every key actually overridden here, and only show up on the keys
+    // that were not: `dismiss` blanking on the one screen whose exit must
+    // never go invisible would be invisible to a test that only checks
+    // `retry`.
+    expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
+    expect(screen.getByText(DEFAULT_STRINGS.errorTitle)).toBeTruthy();
+    expect(screen.getByText(DEFAULT_STRINGS.errorBody)).toBeTruthy();
   } finally {
     jest.useRealTimers();
   }

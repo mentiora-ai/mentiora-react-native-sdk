@@ -136,19 +136,46 @@ type HostInsets = { top: number; right: number; bottom: number; left: number };
  * auto-resolve a peer synchronously at all"), then a try/catch around the
  * require itself for the peer genuinely not being installed.
  */
+/** `insets.top/right/bottom/left` are interpolated straight into a CSS
+ *  length (`${px}px`) with no further validation downstream — an `undefined`
+ *  or non-numeric field from a peer whose shape does not match what we
+ *  expect (a different major version, a mocking mistake, anything) would
+ *  silently become the token `"undefinedpx"`. That is a syntactically VALID
+ *  custom-property value, so nothing throws; the page's own
+ *  `max(env(...), var(--mw-host-inset-top))` then fails at computed-value
+ *  time and the whole padding declaration using it is dropped, not just the
+ *  one side — worse than never having set the property at all. Reject the
+ *  measurement outright rather than pass any part of it through. */
+const hasValidInsets = (insets: HostInsets): boolean =>
+  Number.isFinite(insets.top) &&
+  Number.isFinite(insets.right) &&
+  Number.isFinite(insets.bottom) &&
+  Number.isFinite(insets.left);
+
 const loadSafeAreaInsets = (
   hasRequire: () => boolean = () => typeof require === 'function',
+  // A second injectable seam (not just `hasRequire`) so the WIRING of
+  // `hasValidInsets` into this function — not only the predicate in
+  // isolation — is directly testable: a mutation deleting the
+  // `hasValidInsets` call here is invisible to a test that only calls
+  // `hasValidInsets` itself.
+  requireModule: () => unknown = () => require('react-native-safe-area-context'),
 ): HostInsets | null => {
   if (!hasRequire()) return null;
   try {
-    const mod = require('react-native-safe-area-context') as {
-      initialWindowMetrics?: { insets: HostInsets } | null;
-    };
-    return mod.initialWindowMetrics?.insets ?? null;
+    const mod = requireModule() as { initialWindowMetrics?: { insets: HostInsets } | null };
+    const insets = mod.initialWindowMetrics?.insets;
+    return insets && hasValidInsets(insets) ? insets : null;
   } catch {
     return null; // peer not installed
   }
 };
+
+/** Test-only: exercises `loadSafeAreaInsets`'s OWN wiring of the malformed-
+ *  measurement guard (see `hasValidInsets` above) via its `requireModule`
+ *  seam, distinct from `__hasValidInsetsForTest`, which only proves the
+ *  predicate itself. */
+export const __loadSafeAreaInsetsForTest = loadSafeAreaInsets;
 
 /**
  * `load` is an injectable seam (mirrors `storage.ts`'s `resolveStorage`
@@ -172,6 +199,12 @@ const resolveHostInsets = (
 /** Test-only (mirrors `runtime.ts`'s `__resetRuntimes`): exercises the
  *  branch logic in `resolveHostInsets` directly. */
 export const __resolveHostInsetsForTest = resolveHostInsets;
+
+/** Test-only: the malformed-measurement guard lives inside `loadSafeAreaInsets`
+ *  (never inside `resolveHostInsets`, which trusts whatever `load()` returns),
+ *  so it needs its own direct hook rather than being reachable through
+ *  `__resolveHostInsetsForTest`'s injected `load`. */
+export const __hasValidInsetsForTest = hasValidInsets;
 
 /**
  * A plain style write, not a bridge message — `window.mentioraHost.receive`
@@ -672,36 +705,48 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *  what makes it safe: we only ever call it, and only ever claim the
    *  press as handled, once a session exists in the CURRENT generation.
    *
-   *  This one check also covers "the page claimed the button, then died"
-   *  (resolution 5) WITHOUT reading `errorCode`/`dismissed` at all: reaching
-   *  either of those states requires every ladder for the CURRENT
-   *  generation to have already given up, and 11b resets every ladder's own
-   *  counter/timer on any successful `initialize` (the crash and network
-   *  counters inside the `initialize` handler above; the watchdog timer
-   *  synchronously, in the same handler) — so a generation can only reach
-   *  its cap (and show the error surface) if it never had a live session to
-   *  begin with. A separate `errorCode`/`dismissed` guard was tried first
-   *  and deliberately removed: it could not be made to fail under mutation
-   *  (every construction that set `errorCode` already had `sessionKey()
-   *  === null`), which means it was unreachable dead weight, not defense
-   *  in depth. That unreachability is a property of 11b's CURRENT,
-   *  reviewed reset behaviour, not of this file — if a future change to
-   *  11b ever stops resetting a ladder's counter/timer on a successful
-   *  handshake, this single check stops being sufficient on its own, and
-   *  that coupling is worth knowing about before touching either side. */
+   *  `dismissed` and `errorCode !== null` are checked FIRST and independently
+   *  of the session key, because the session key is NOT proof that the
+   *  error surface isn't showing. It is tempting to think it is — 11b resets
+   *  every ladder's counter/timer on a successful `initialize`, so the
+   *  network and crash ladders can only reach their cap on a generation that
+   *  never had a live session — but the handshake watchdog's own give-up
+   *  branch (`armWatchdog`'s `else { showError('handshake_timeout') }`) is
+   *  the exception: it calls `showError` directly, with NO `advanceGeneration`
+   *  of its own, so `peer`'s `initializeLatch` and session key are untouched.
+   *  A slow page — a cold start past two 8s watchdog cycles is not exotic —
+   *  can still complete `initialize` and get a live session key AFTER that
+   *  error surface is already up, since the WebView deliberately stays
+   *  mounted underneath it for exactly this reason (so Retry has something
+   *  to retry). If that late page then claims the button, a session-key-only
+   *  check would forward every later back press to a page hidden behind
+   *  `importantForAccessibility="no-hide-descendants"` — handled, but
+   *  invisible, with nothing left to ever release it (the watchdog's
+   *  re-arm no-ops: `handled.current` is still `true` for this generation).
+   *  That is the exact trap this screen exists to prevent, reached through
+   *  the one path that does not reset the session key. `dismissed` covers
+   *  the same gap once Retry/Dismiss are pressed: Dismiss stops rendering
+   *  the WebView but does not touch `backHeld` or the peer, so without this
+   *  check a page that claimed the button before a late handshake would
+   *  leave the BackHandler subscription (still live; only the WebView is
+   *  unmounted) intercepting every press behind a blank `<View />`. */
   const onHardwareBack = useCallback((): boolean => {
+    if (dismissed || errorCode !== null) return false;
     if (backHeld.current && peer.sessionKey() !== null) {
       peer.sendBack();
       return true;
     }
     return false;
-  }, [peer]);
+  }, [peer, dismissed, errorCode]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
     // `.remove()` on the subscription BackHandler.addEventListener returns —
     // never `BackHandler.removeEventListener`, deleted in RN 0.77, which
-    // throws if called.
+    // throws if called. Re-subscribing when `dismissed`/`errorCode` change
+    // (both flow into `onHardwareBack`'s identity via its own deps) is fine:
+    // `.remove()` on the way out always pairs with the `addEventListener`
+    // that produced it.
     return () => subscription.remove();
   }, [onHardwareBack]);
 
