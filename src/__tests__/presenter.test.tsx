@@ -6,7 +6,7 @@
 // fired as a DOM-style event.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { StrictMode, useEffect } from 'react';
+import { StrictMode, Suspense, useEffect } from 'react';
 import {
   __lastWebView,
   __resetWebViews,
@@ -109,15 +109,17 @@ const backHandling = (active: boolean, view?: MockWebViewRef): string =>
 // `RCTModalHostView`, which carries `onRequestClose` as one of its own host
 // props (`Modal.js`). Read it off that host node rather than firing a
 // DOM-style event `fireEvent` has no mapping for.
+// `screen.container`, not `screen.root` (which is only `container.children[0]`
+// — the FIRST top-level sibling): several tests here render the Modal's host
+// alongside an inline `<MentioraWidget />` sibling, and `root` would silently
+// search only the sibling that happens to render first.
+const modalHosts = () =>
+  screen.container.queryAll((node) => typeof node.props.onRequestClose === 'function', {
+    includeSelf: true,
+  });
+
 const requestClose = (): void => {
-  // `screen.container`, not `screen.root` (which is only `container.children[0]`
-  // — the FIRST top-level sibling): several tests here render the Modal's
-  // host alongside an inline `<MentioraWidget />` sibling, and `root` would
-  // silently search only the sibling that happens to render first.
-  const [modal] = screen.container.queryAll(
-    (node) => typeof node.props.onRequestClose === 'function',
-    { includeSelf: true },
-  );
+  const [modal] = modalHosts();
   if (!modal) throw new Error('no Modal with onRequestClose found — call Mentiora.open() first');
   (modal.props.onRequestClose as () => void)();
 };
@@ -626,4 +628,62 @@ test('a host onEvent that throws on close still lets the presenter close the Mod
     await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss }));
   });
   expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
+  // The assertion that makes this test real (branch review, M4). The line
+  // above passes under the bug too: `MentioraWidget`'s Dismiss path calls
+  // `setDismissed(true)` and renders `<View />` BEFORE it calls `onEvent`, so
+  // the WebView is gone whether or not `Mentiora.close()` ever ran. The MODAL
+  // is what gets stranded — `visible={true}` over the blank view, with no
+  // escape on iOS — so the Modal is what has to be asserted gone. Fails with
+  // `Received array: [<Modal onRequestClose={...} visible={true}>...]` under
+  // the single-line mutation that swaps `Mentiora.close()` back after
+  // `config.onEvent?.(event)` in `presenter.tsx`'s `ModalBody`.
+  expect(modalHosts()).toHaveLength(0);
+});
+
+// Branch review, M3. The phantom-id leak `hostIds` documents as "benign"
+// is not: a `<MentioraHost />` that renders and never commits leaves an id
+// that nothing ever splices out, sitting at index 0 because it was pushed
+// first. The teardown then hands ownership to `hostIds[0]` — the phantom —
+// the first time a real host unmounts, and every surviving host renders
+// `null` for the rest of the process. `open()` resolves and nothing appears.
+//
+// `<Suspense>` in an app root is ordinary (`React.lazy`, React Navigation's
+// lazy screens, a `use()`d promise), and so is a discarded render from an
+// interrupted transition.
+//
+// Catches the single-line change of `subscribedIds[0]` back to `hostIds[0]`
+// in `registerHost`'s teardown: host "b" then renders nothing and the final
+// query finds zero WebViews.
+function Suspends({ gate }: { gate: Promise<void> }): null {
+  throw gate;
+}
+
+test('a host render that never commits can never end up owning the Modal', async () => {
+  Mentiora.configure(cfg);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  // The phantom: this `<MentioraHost />` renders (pushing its id) and is then
+  // discarded along with the rest of the boundary when its sibling suspends.
+  const view = await render(
+    <Suspense fallback={null}>
+      <MentioraHost />
+      <Suspends gate={gate} />
+    </Suspense>,
+  );
+  release();
+  expect(screen.queryByTestId('mentiora-webview')).toBeNull();
+
+  // Now the ordinary screen transition: host "a" owns the Modal, then
+  // unmounts while host "b" survives.
+  await view.rerender(<TwoHosts showFirst={true} />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  expect(screen.getAllByTestId('mentiora-webview')).toHaveLength(1);
+  await view.rerender(<TwoHosts showFirst={false} />);
+  await waitFor(() => {
+    expect(screen.getAllByTestId('mentiora-webview')).toHaveLength(1);
+  });
 });

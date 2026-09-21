@@ -91,6 +91,25 @@ const listeners = new Set<() => void>();
  *  (StrictMode, Offscreen, Fast Refresh) — a push that only ever happens at
  *  render is spliced out by the first such cycle and never restored. */
 const hostIds: number[] = [];
+/** Hosts that have actually COMMITTED, oldest first — written only by
+ *  `registerHost` and its teardown, never at render.
+ *
+ *  `hostIds` above is doing two different jobs, and only one of them wants
+ *  render-time membership. `open()`'s existence check does (that was fix
+ *  round 3, Major 5: a host mounting after its caller in the same commit must
+ *  not read as absent). Ownership selection wants the opposite, and the
+ *  caveat `hostIds` documents is not benign after all (branch review, M3): a
+ *  host that renders and never commits — a `<Suspense>` boundary whose
+ *  sibling suspends, an interrupted transition — leaks an id that is never
+ *  spliced out, and it sits at index 0 because it was pushed first. The
+ *  teardown below then hands ownership to `hostIds[0]`, i.e. to the phantom,
+ *  the first time a real host unmounts. `MentioraHost` renders `null` for
+ *  every surviving host from then on and `Mentiora.open()` resolves onto
+ *  nothing, permanently, with no error and nothing in the logs.
+ *
+ *  Two arrays, because the two questions are different: "is a host in the
+ *  tree?" (render) and "which host may render the Modal?" (commit). */
+const subscribedIds: number[] = [];
 let nextHostId = 0;
 
 const notify = (): void => {
@@ -120,13 +139,18 @@ const registerHost = (id: number, onChange: () => void): (() => void) => {
   // re-render (`<Activity>`/Offscreen, `react-freeze`, Fast Refresh), and for
   // a host that outlives a `__resetPresenter()` and later resubscribes.
   if (!hostIds.includes(id)) hostIds.push(id);
+  if (!subscribedIds.includes(id)) subscribedIds.push(id);
   if (state.activeHostId === null) state = { ...state, activeHostId: id };
   notify();
   return () => {
     listeners.delete(onChange);
     const index = hostIds.indexOf(id);
     if (index >= 0) hostIds.splice(index, 1);
-    if (state.activeHostId === id) state = { ...state, activeHostId: hostIds[0] ?? null };
+    const subscribed = subscribedIds.indexOf(id);
+    if (subscribed >= 0) subscribedIds.splice(subscribed, 1);
+    // From `subscribedIds`, never `hostIds`: ownership may only ever name a
+    // host that actually committed (see that array's own note).
+    if (state.activeHostId === id) state = { ...state, activeHostId: subscribedIds[0] ?? null };
     notify();
   };
 };
@@ -199,6 +223,7 @@ export const __resetPresenter = (): void => {
   state = { visible: false, config: null, activeHostId: null };
   listeners.clear();
   hostIds.length = 0;
+  subscribedIds.length = 0;
   nextHostId = 0;
 };
 
