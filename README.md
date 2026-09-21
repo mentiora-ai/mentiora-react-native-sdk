@@ -24,13 +24,19 @@ Embed the widget inline:
 ```tsx
 import { MentioraWidget } from '@mentiora/react-native-sdk';
 
+// Hoisted on purpose: `identity` is compared by reference. A fresh object
+// literal on every render rebuilds the identity provider and discards its
+// cached token with it, so no refresh ever reuses anything. Define it once —
+// at module scope, or behind a `useMemo`.
+const identity = {
+  endpoint: 'https://api.acme.com/mentiora/token',
+  headers: () => ({ Authorization: `Bearer ${yourAuthToken()}` }),
+};
+
 <MentioraWidget
   widgetOrigin="https://widget.acme.mentiora.ai"
   embedKey="pk_wgt_a1b2c3d4e5f6"
-  identity={{
-    endpoint: 'https://api.acme.com/mentiora/token',
-    headers: () => ({ Authorization: `Bearer ${token}` }),
-  }}
+  identity={identity}
 />
 ```
 
@@ -62,6 +68,12 @@ await Mentiora.logout(); // rotates the install id and drops the cached token
 ```
 
 `Mentiora.open()` throws if `<MentioraHost />` isn't mounted yet.
+
+**Every `open()` reloads the page, and that is deliberate.** Nothing stays
+mounted while the panel is closed, so each open resumes the thread from server
+state — which is what makes messages that arrived in the meantime appear. The
+cost is a page load on every open; the benefit is that you never see stale
+state. There is no signal while the panel is closed in v0: no badge, no push.
 
 Omit `identity` for anonymous chat. `widgetOrigin` and `embedKey` come from the
 install snippet in Mentiora admin.

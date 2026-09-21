@@ -96,12 +96,80 @@ jobs:
           cd /tmp/consumer
           # Resolution, not evaluation: an RN entry pulls in Flow-typed react-native
           # source that bare node cannot parse. What must hold is that both conditions
-          # resolve to files that exist, and that the emitted .d.ts typechecks.
+          # resolve to files that exist, and that the ESM .d.ts typechecks under a
+          # consumer's own tsc. `--module esnext --moduleResolution bundler` only ever
+          # takes the "import" condition, so lib/module/index.d.ts is the ONLY one
+          # check.ts below exercises; the CJS .d.ts is covered by `attw --pack .` in
+          # the `check` job, which walks every condition in the exports map.
           node -e "const p=require.resolve('@mentiora/react-native-sdk'); if(!/lib\/commonjs\/index\.js$/.test(p)) throw new Error('require resolved to '+p); console.log('cjs ok', p)"
           node --input-type=module -e "const u = await import.meta.resolve('@mentiora/react-native-sdk'); if(!/lib\/module\/index\.js$/.test(u)) throw new Error('import resolved to '+u); console.log('esm ok', u)"
-          # Names MentioraStrings and MentioraErrorCode on purpose: this is what
-          # checks the public type list from OUTSIDE the package, where a missing
-          # export is a TS2305 rather than something only ../index sees.
-          printf "import type { MentioraConfig, MentioraStrings, MentioraErrorCode } from '@mentiora/react-native-sdk';\nconst c: MentioraConfig = { widgetOrigin: 'https://widget.acme.mentiora.ai', embedKey: 'pk_wgt_x', strings: { retry: 'Nochmal' } };\nconst e: MentioraErrorCode = 'handshake_timeout';\nexport default { c, e };\n" > check.ts
+          # Names EVERY exported type, from OUTSIDE the package, where a missing
+          # export is a TS2305 rather than something only ../index can see. The
+          # negative cases at the bottom matter as much as the positive ones: a
+          # union accidentally widened to `string` passes every positive check
+          # above and nothing else in the repo would notice.
+          cat > check.ts <<'TS'
+          import type {
+            MentioraConfig,
+            MentioraErrorCode,
+            MentioraEvent,
+            MentioraIdentity,
+            MentioraIdentityCallback,
+            MentioraIdentityFetcher,
+            MentioraStorage,
+            MentioraStrings,
+            MentioraWidgetProps,
+            StorageReason,
+          } from '@mentiora/react-native-sdk';
+
+          const storage: MentioraStorage = {
+            getItem: async () => null,
+            setItem: async () => {},
+            removeItem: async () => {},
+          };
+          const callback: MentioraIdentityCallback = { getToken: () => 'jwt' };
+          const fetcher: MentioraIdentityFetcher = {
+            endpoint: 'https://api.acme.com/mentiora/token',
+            headers: () => ({ Authorization: 'Bearer x' }),
+            body: () => ({ scope: 'widget' }),
+          };
+          const identity: MentioraIdentity = callback satisfies MentioraIdentity;
+          const strings: Partial<MentioraStrings> = { retry: 'Nochmal' };
+          const code: MentioraErrorCode = 'handshake_timeout';
+          const reason: StorageReason = 'peer-absent';
+
+          // Every variant, so a dropped or renamed one is a compile error here
+          // rather than a surprise in a customer's switch statement.
+          const events: MentioraEvent[] = [
+            { type: 'ready' },
+            { type: 'close' },
+            { type: 'identityError', reason: 'identity_required' },
+            { type: 'openUrl', url: 'https://example.com' },
+            { type: 'error', code },
+            { type: 'storageUnavailable', reason },
+          ];
+
+          const config: MentioraConfig = {
+            widgetOrigin: 'https://widget.acme.mentiora.ai',
+            embedKey: 'pk_wgt_x',
+            identity,
+            storage,
+            strings,
+            onEvent: (event: MentioraEvent) => void event,
+            onOpenUrl: (url: string) => url.startsWith('https:'),
+          };
+          const props: MentioraWidgetProps = config;
+
+          // @ts-expect-error not a MentioraErrorCode
+          const badCode: MentioraErrorCode = 'nope';
+          // @ts-expect-error not a MentioraEvent variant
+          const badEvent: MentioraEvent = { type: 'nope' };
+          // @ts-expect-error widgetOrigin is required
+          const badConfig: MentioraConfig = { embedKey: 'pk_wgt_x' };
+          // @ts-expect-error not a StorageReason
+          const badReason: StorageReason = 'whatever';
+
+          export default { fetcher, events, config, props, badCode, badEvent, badConfig, badReason };
+          TS
           npx tsc --noEmit --strict --moduleResolution bundler --module esnext --target esnext check.ts
           echo "types ok"
