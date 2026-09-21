@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # Renovate rewrites these tags to pinned digests on its first run
+      # (pinDigests: true in renovate.json).
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      # bun run test shells out to `node --test`, and the pack step below uses
+      # npm; both would otherwise run on the runner's ambient Node.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run test
+      - run: bun run build
+
+      - run: bunx publint --strict
+      - run: bunx attw --pack .
+
+      - name: tarball size budget
+        run: |
+          SIZE=$(npm pack --ignore-scripts --dry-run --json | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8'))[0].size")
+          echo "tarball: $SIZE bytes"
+          [ "$SIZE" -lt 102400 ] || { echo "package exceeds the 100KB budget"; exit 1; }
+
+  # Installs the packed tarball with npm, at the low end of every peer range.
+  # bun and npm hoist and resolve differently, so this is what proves a consumer
+  # on npm gets a working package: a phantom import fails at require time, a
+  # wrong peer range fails at install time.
+  consumer-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: npm pack --ignore-scripts
+
+      - name: install the tarball under npm at the peer floor
+        run: |
+          TARBALL="$PWD/$(ls mentiora-react-native-sdk-*.tgz)"
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          # react-native-safe-area-context is deliberately absent: it is an
+          # optional peer and the absent path is the one that breaks.
+          npm install --no-audit --no-fund \
+            "$TARBALL" \
+            react@18 \
+            react-native@0.76 \
+            react-native-webview@13.6.0 \
+            @react-native-async-storage/async-storage@1.23.1 \
+            typescript@6.0.3
+
+      - name: resolve both entries and the public types
+        run: |
+          cd /tmp/consumer
+          node -e "const m=require('@mentiora/react-native-sdk'); if(!m.SDK_VERSION) throw new Error('no SDK_VERSION from the CJS entry'); console.log('cjs ok', m.SDK_VERSION)"
+          printf "import { SDK_VERSION } from '@mentiora/react-native-sdk';\nconsole.log('esm ok', SDK_VERSION);\n" > check.mjs
+          node check.mjs
+          printf "import type { MentioraConfig } from '@mentiora/react-native-sdk';\nconst c: MentioraConfig = { widgetOrigin: 'https://widget.acme.mentiora.ai', embedKey: 'pk_wgt_x' };\nexport default c;\n" > check.ts
+          npx tsc --noEmit --strict --moduleResolution bundler --module esnext --target esnext check.ts
+          echo "types ok"

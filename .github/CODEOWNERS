@@ -1,0 +1,5 @@
+# Everything in this repo is the published artifact or the pipeline that publishes it,
+# so the whole tree is owned by one team rather than scoped per path as in
+# mentiora-platform. Contractors (@mentiora-ai/dev-ext) can author changes here; they
+# cannot be the review that lands them.
+*                             @mentiora-ai/app-dev

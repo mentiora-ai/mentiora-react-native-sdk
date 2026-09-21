@@ -1,4 +1,9 @@
 node_modules/
-dist/
+lib/
+coverage/
+*.tgz
 *.log
 .DS_Store
+.specs/
+.superpowers/
+lib-test/

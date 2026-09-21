@@ -1,0 +1,19 @@
+# Categories for GitHub's generated release notes. The generated list is a
+# starting point for the CHANGELOG.md entry, which is the source of truth.
+#
+# "*" is the catch-all for pull requests no EARLIER category matched, so every
+# specific category has to sit above it.
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+  categories:
+    - title: Bridge protocol
+      labels:
+        - protocol
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Changes
+      labels:
+        - "*"

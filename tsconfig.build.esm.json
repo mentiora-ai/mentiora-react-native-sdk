@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "lib/module",
+    "noEmit": false,
+    "declaration": true,
+    "sourceMap": true,
+    "rootDir": "src",
+    "declarationMap": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "lib", "example", "**/__tests__", "**/*.test.ts", "**/*.test.tsx"]
+}
