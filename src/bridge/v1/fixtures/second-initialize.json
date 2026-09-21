@@ -1,0 +1,28 @@
+{
+  "name": "second-initialize",
+  "protocolVersion": 1,
+  "role": "host",
+  "steps": [
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r4",
+        "method": "mentiora/initialize",
+        "params": { "protocolVersion": 1 }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r4",
+        "error": {
+          "code": -32600,
+          "message": "initialize already completed for this page load"
+        },
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    }
+  ]
+}
