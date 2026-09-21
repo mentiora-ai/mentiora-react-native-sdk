@@ -8,7 +8,10 @@
  * - `params` is required on requests and notifications; a sender that omits
  *   it is read as `{}` rather than dropped, because dropping it would hang
  *   the sender's caller for its full 30s timeout waiting for an answer that
- *   was actually sent.
+ *   was actually sent. A response also carries `params` (it is where
+ *   `params.sessionKey` lives) and gets the same missing → `{}` treatment,
+ *   because a page's response to a host-initiated request is itself a
+ *   page → host message the session-key MUST applies to.
  * - Unknown top-level fields are ignored, never a reason to reject a
  *   message — `parseInbound` only ever copies out the fields it recognises.
  * - A response carries an `id` plus `result` or `error`, and never a
@@ -39,8 +42,8 @@ export interface InboundErrorPayload {
 }
 
 export type InboundResponse =
-  | { jsonrpc: '2.0'; id: JsonRpcId; result: unknown }
-  | { jsonrpc: '2.0'; id: JsonRpcId; error: InboundErrorPayload };
+  | { jsonrpc: '2.0'; id: JsonRpcId; result: unknown; params?: JsonRpcParams }
+  | { jsonrpc: '2.0'; id: JsonRpcId; error: InboundErrorPayload; params?: JsonRpcParams };
 
 export type InboundMessage = InboundRequest | InboundNotification | InboundResponse;
 
@@ -54,7 +57,14 @@ const isJsonRpcId = (v: unknown): v is JsonRpcId => isNonEmptyString(v);
 const isJsonRpcParams = (v: unknown): v is JsonRpcParams => isPlainObject(v);
 
 const isErrorPayload = (v: unknown): v is InboundErrorPayload =>
-  isPlainObject(v) && typeof v.code === 'number' && typeof v.message === 'string';
+  isPlainObject(v) &&
+  typeof v.code === 'number' &&
+  Number.isInteger(v.code) &&
+  typeof v.message === 'string';
+
+// Structural checks only — run these on `parseInbound`'s normalised output,
+// not on a raw `postMessage` payload. They do not themselves default a
+// missing `params`; only `parseInbound` does that.
 
 export function isRequest(v: unknown): v is InboundRequest {
   if (!isPlainObject(v)) return false;
@@ -81,6 +91,8 @@ export function isResponse(v: unknown): v is InboundResponse {
   const hasError = 'error' in v && v.error !== undefined;
   if (hasResult === hasError) return false; // exactly one of result / error
   if (hasError && !isErrorPayload(v.error)) return false;
+  const hasParams = 'params' in v && v.params !== undefined;
+  if (hasParams && !isJsonRpcParams(v.params)) return false;
   return true;
 }
 
@@ -90,9 +102,12 @@ export function isResponse(v: unknown): v is InboundResponse {
  *
  * Rejects non-JSON, arrays, non-objects and non-2.0 envelopes. Requires a
  * non-empty string `id` when one is present — a numeric id is invalid.
- * Defaults a missing `params` to `{}` on requests and notifications rather
- * than dropping the message. Copies out only the fields it recognises, so
- * an unknown top-level field is ignored rather than a reason to reject.
+ * Defaults a missing `params` to `{}` on requests, notifications and
+ * responses alike rather than dropping the message — a response's `params`
+ * is where `params.sessionKey` lives, and the session-key MUST applies to a
+ * page's response, not only its requests and notifications. Copies out
+ * only the fields it recognises, so an unknown top-level field is ignored
+ * rather than a reason to reject.
  */
 export function parseInbound(raw: string): InboundMessage | null {
   let parsed: unknown;
@@ -134,11 +149,20 @@ export function parseInbound(raw: string): InboundMessage | null {
   const id = parsed.id;
   if (typeof id !== 'string') return null;
   if (hasResult === hasError) return null; // exactly one of result / error
+
+  // A response also carries `params` — it is where `params.sessionKey` lives,
+  // and the session-key MUST applies to page-sent responses too. Same
+  // present / malformed / default-to-`{}` handling as requests and
+  // notifications: missing reads as `{}`, present-but-malformed rejects.
+  const rawParams = parsed.params;
+  if (rawParams !== undefined && !isJsonRpcParams(rawParams)) return null;
+  const params: JsonRpcParams = isJsonRpcParams(rawParams) ? rawParams : {};
+
   if (hasError) {
     if (!isErrorPayload(parsed.error)) return null;
-    return { jsonrpc: '2.0', id, error: parsed.error };
+    return { jsonrpc: '2.0', id, error: parsed.error, params };
   }
-  return { jsonrpc: '2.0', id, result: parsed.result };
+  return { jsonrpc: '2.0', id, result: parsed.result, params };
 }
 
 export function isInitializeParams(v: unknown): v is { protocolVersion: number } {

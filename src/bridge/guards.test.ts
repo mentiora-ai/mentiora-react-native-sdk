@@ -31,3 +31,24 @@ test('missing params on a request reads as {} rather than dropping the message',
   assert.ok(r && isRequest(r));
   assert.deepEqual(r.params, {});
 });
+
+test("a response's params.sessionKey survives parseInbound", () => {
+  const r = parseInbound(
+    '{"jsonrpc":"2.0","id":"h2","result":{},"params":{"sessionKey":"sk-9f2a1b7e3d4c"}}',
+  );
+  assert.ok(r && isResponse(r));
+  assert.deepEqual(r.params, { sessionKey: 'sk-9f2a1b7e3d4c' });
+});
+
+test('missing params on a response reads as {} rather than dropping the message', () => {
+  const r = parseInbound('{"jsonrpc":"2.0","id":"h2","result":{}}');
+  assert.ok(r && isResponse(r));
+  assert.deepEqual(r.params, {});
+});
+
+test('an error response rejects a non-integer code', () => {
+  assert.equal(
+    parseInbound('{"jsonrpc":"2.0","id":"h2","error":{"code":-32601.5,"message":"x"}}'),
+    null,
+  );
+});
