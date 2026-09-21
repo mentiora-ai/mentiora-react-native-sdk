@@ -64,7 +64,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "node --test",
+    "test:core": "tsc -p tsconfig.test.json && node scripts/run-core-tests.mjs",
+    "test": "bun run test:core",
     "assert:version": "node scripts/assert-version.mjs",
     "prepack": "bun run build",
     "hooks": "lefthook install"
@@ -85,8 +86,9 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.12",
     "@arethetypeswrong/cli": "0.18.5",
+    "@biomejs/biome": "2.5.12",
+    "@types/node": "26.5.1",
     "lefthook": "2.1.12",
     "publint": "0.3.24",
     "typescript": "6.0.3"
