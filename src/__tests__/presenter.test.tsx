@@ -687,3 +687,39 @@ test('a host render that never commits can never end up owning the Modal', async
     expect(screen.getAllByTestId('mentiora-webview')).toHaveLength(1);
   });
 });
+
+// Re-review, N5. `dismissed` is never cleared, but the `runtime.onReload`
+// subscription stays live through it — so `Mentiora.logout()` ran the whole
+// fresh-start path against a widget rendering a blank `<View />`: a remount
+// key bump and a fresh watchdog on a WebView nobody renders, and a
+// `handshake_timeout` handed to the host ~16s later for a surface the user
+// closed and that could never come back. That contradicts `restartLoad`'s own
+// argument that a logout IS a complete fresh start.
+//
+// Catches deleting `setDismissed(false)` from `restartLoad`: the WebView never
+// comes back, so the query below throws.
+test('logout revives a dismissed inline widget rather than restarting a blank one', async () => {
+  Mentiora.configure(cfg);
+  const onEvent = jest.fn();
+  await render(<MentioraWidget {...cfg} onEvent={onEvent} />);
+  await driveCrashLadderToExhaustion();
+  await act(async () => {
+    await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss }));
+  });
+  expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
+
+  await act(async () => {
+    await Mentiora.logout();
+  });
+
+  // The fresh start is real: a page again, and one that can actually speak.
+  expect(await handshakeInstallId(screen.getByTestId('mentiora-webview'))).toEqual(
+    expect.any(String),
+  );
+  // And no error event for a surface that was never on screen. Two watchdog
+  // cycles' worth of time, which is what the spurious one took to arrive.
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(20000);
+  });
+  expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});

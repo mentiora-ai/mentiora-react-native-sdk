@@ -15,7 +15,7 @@
  */
 import { createIdentityProvider, type IdentityProvider } from './identity.js';
 import { loadOrCreateInstallId, rotateInstallId } from './install-id.js';
-import { resolveStorage, type StorageReason } from './storage.js';
+import { resolveStorage, type StorageStatus } from './storage.js';
 import type { MentioraConfig, MentioraIdentity, MentioraStorage } from './types.js';
 
 /** 16 random bytes, from the WebView that is asking. */
@@ -26,10 +26,13 @@ export type MentioraRuntime = {
    *  captured when the runtime was built (see `installId` below). */
   installId: (randomBytes: RandomBytes) => Promise<string>;
   identity: IdentityProvider;
-  /** From Task 6's `resolveStorage`. `reason` is carried, not just the boolean: the
-   *  composition root's __DEV__ warning must be able to say "this build cannot
-   *  auto-resolve storage, pass config.storage" rather than naming the wrong cause. */
-  storage: { ephemeral: boolean; reason: StorageReason; detail?: string };
+  /** From Task 6's `resolveStorage`, minus the store itself. `reason` is carried,
+   *  not just the boolean: the composition root's __DEV__ warning must be able to
+   *  say "this build cannot auto-resolve storage, pass config.storage" rather than
+   *  naming the wrong cause. Discriminated like `ResolvedStorage` is, so the
+   *  composition root gets the narrow, public `StorageUnavailableReason` from the
+   *  `ephemeral` check it already makes rather than from a cast (re-review, N6). */
+  storage: StorageStatus;
   logout: () => Promise<void>; // rotate + clear identity; reloads are the caller's job
   onReload: (fn: () => void) => () => void; // mounted widgets subscribe
 };
@@ -112,7 +115,13 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   const runtime: MentioraRuntime = {
     installId,
     identity: createIdentityProvider({ identity: config.identity, embedKey, storage }),
-    storage: { ephemeral: resolved.ephemeral, reason: resolved.reason, detail: resolved.detail },
+    // Rebuilt per branch rather than field by field: a single object literal
+    // over the union would widen `ephemeral` to `boolean` and `reason` to the
+    // internal `StorageReason`, losing exactly the correlation the type exists
+    // to keep.
+    storage: resolved.ephemeral
+      ? { ephemeral: true, reason: resolved.reason, detail: resolved.detail }
+      : { ephemeral: false, reason: resolved.reason },
     onReload,
     logout: async () => {
       // Drop the memo AND park every new mint behind the rotation: a caller

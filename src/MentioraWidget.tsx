@@ -766,12 +766,25 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *    no silent recovery, which is precisely the state the line above just
    *    cleared. (A successful `initialize` resets all three anyway, so this
    *    only ever matters for a post-logout page that itself struggles —
-   *    exactly the case where inheriting is worst.) */
+   *    exactly the case where inheriting is worst.)
+   *  - `setDismissed(false)` (re-review, N5): Retry cannot reach this line
+   *    while dismissed (the button it lives on is not rendered), so this only
+   *    ever affects the logout path — where leaving it set made the "fresh
+   *    start" a fiction. `dismissed` is never cleared anywhere else, but the
+   *    `onReload` subscription stays live, so a logout ran the whole restart
+   *    against a widget still rendering a blank `<View />`: a remount key
+   *    bump and a fresh watchdog on a WebView nobody renders, and an
+   *    `{type:'error', code:'handshake_timeout'}` handed to the host ~16s
+   *    later for a surface the user had closed and that could never come
+   *    back. Either the restart is real or it should not run; an inline
+   *    widget is still in the host's tree, and a logout is a different user,
+   *    so making it real is the answer consistent with everything above. */
   const restartLoad = (): void => {
     networkFailures.current = 0;
     crashFailures.current = 0;
     handshakeTimeouts.current = 0;
     beginFreshLoad();
+    setDismissed(false);
     setRemountKey((k) => k + 1);
     setErrorCode(null);
   };

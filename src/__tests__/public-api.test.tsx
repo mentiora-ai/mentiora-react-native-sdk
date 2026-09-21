@@ -3,6 +3,8 @@
 // `.ts` file here would be compiled by nothing and run by nothing — a suite
 // that silently never executes. The extension is the only thing that makes
 // these assertions run.
+
+import type { MentioraEvent } from '../index';
 import * as sdk from '../index';
 
 // `expect(typeof sdk.MentioraWidget).toBe('function')` is NOT a test: the scaffold stub
@@ -40,4 +42,19 @@ test('the internal test helpers are not reachable through the public entry', () 
 
 test('Mentiora carries exactly the four documented methods', () => {
   expect(Object.keys(sdk.Mentiora).sort()).toEqual(['close', 'configure', 'logout', 'open'].sort());
+});
+
+// Re-review, N6. `storageUnavailable`'s `reason` must stay NARROWER than the
+// internal `StorageReason`: `'override'` and `'peer-loaded'` both mean storage
+// works, so neither can ever accompany the event, and carrying them on a
+// versioned union would hand every consumer two switch arms that are dead by
+// construction. This is a compile-time assertion — it is enforced by `bun run
+// typecheck`, which covers `src/__tests__`, and the `@ts-expect-error` below
+// fails the build the moment someone widens the union back. ci.yml's check.ts
+// asserts the same thing from OUTSIDE the package, against the emitted .d.ts.
+test('storageUnavailable cannot carry a reason that means storage works', () => {
+  const narrow: MentioraEvent = { type: 'storageUnavailable', reason: 'peer-absent' };
+  // @ts-expect-error 'override' is not a StorageUnavailableReason
+  const wide: MentioraEvent = { type: 'storageUnavailable', reason: 'override' };
+  expect([narrow, wide]).toHaveLength(2);
 });

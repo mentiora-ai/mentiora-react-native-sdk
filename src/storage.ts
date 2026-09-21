@@ -22,24 +22,34 @@
  * from "this build cannot auto-resolve storage at all — pass `storage`
  * explicitly on `MentioraConfig`".
  */
-import type { MentioraStorage, StorageReason } from './types.js';
+import type { MentioraStorage, StorageUnavailableReason } from './types.js';
 
-// `StorageReason` is declared in `types.ts` rather than here because it rides
-// on the public `MentioraEvent` union (§2.4's `storageUnavailable`); this
-// re-export keeps every internal caller importing it from the module that
-// produces it.
-export type { MentioraStorage, StorageReason };
+export type { MentioraStorage, StorageUnavailableReason };
 
-export type ResolvedStorage = {
-  storage: MentioraStorage;
-  ephemeral: boolean;
-  reason: StorageReason;
-  /** The underlying error's message, when there was one ('no-require', a real
-   *  require failure tagged 'peer-absent', or a custom `load` throwing
-   *  'load-threw') — enough for a later `__DEV__` diagnostic to say exactly
-   *  why, without leaking non-Error throw values verbatim. */
-  detail?: string;
-};
+/** Internal and wider than the public `StorageUnavailableReason`: the two
+ *  extra members are the cases where storage WORKS, which no event reports. */
+export type StorageReason = 'override' | 'peer-loaded' | StorageUnavailableReason;
+
+/**
+ * Whether storage persists, and why. Discriminated on `ephemeral`, so a caller
+ * that has checked it gets the narrow, public `StorageUnavailableReason` from
+ * the compiler rather than from a cast — `reason` and `ephemeral` can then
+ * never be made to disagree (re-review, N6).
+ *
+ * Written out rather than built with `Omit<ResolvedStorage, 'storage'>`:
+ * `Omit` over a union collapses it into ONE member with both `reason` sets
+ * unioned, which is precisely the correlation this type exists to keep.
+ *
+ * `detail` carries the underlying error's message, when there was one
+ * ('no-require', a real require failure tagged 'peer-absent', or a custom
+ * `load` throwing 'load-threw') — enough for a `__DEV__` diagnostic to say
+ * exactly why, without leaking non-Error throw values verbatim.
+ */
+export type StorageStatus =
+  | { ephemeral: false; reason: 'override' | 'peer-loaded'; detail?: string }
+  | { ephemeral: true; reason: StorageUnavailableReason; detail?: string };
+
+export type ResolvedStorage = { storage: MentioraStorage } & StorageStatus;
 
 /** Tags *why* `defaultLoad` failed, so `resolveStorage`'s catch can tell
  *  "cannot even attempt a require" apart from "attempted, peer not there". */
@@ -102,7 +112,8 @@ export const resolveStorage = (
     if (loaded) return { storage: loaded, ephemeral: false, reason: 'peer-loaded' };
     return { storage: memoryStorage(), ephemeral: true, reason: 'peer-absent' };
   } catch (err) {
-    const reason: StorageReason = err instanceof StorageLoadFailure ? err.kind : 'load-threw';
+    const reason: StorageUnavailableReason =
+      err instanceof StorageLoadFailure ? err.kind : 'load-threw';
     const detail = err instanceof Error ? err.message : String(err);
     return { storage: memoryStorage(), ephemeral: true, reason, detail };
   }

@@ -30,6 +30,6 @@ export type {
   MentioraStorage,
   MentioraStrings,
   MentioraWidgetProps,
-  StorageReason,
+  StorageUnavailableReason,
 } from './types.js';
 export { SDK_NAME, SDK_VERSION } from './version.js';

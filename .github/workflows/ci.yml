@@ -119,7 +119,7 @@ jobs:
             MentioraStorage,
             MentioraStrings,
             MentioraWidgetProps,
-            StorageReason,
+            StorageUnavailableReason,
           } from '@mentiora/react-native-sdk';
 
           const storage: MentioraStorage = {
@@ -136,7 +136,7 @@ jobs:
           const identity: MentioraIdentity = callback satisfies MentioraIdentity;
           const strings: Partial<MentioraStrings> = { retry: 'Nochmal' };
           const code: MentioraErrorCode = 'handshake_timeout';
-          const reason: StorageReason = 'peer-absent';
+          const reason: StorageUnavailableReason = 'peer-absent';
 
           // Every variant, so a dropped or renamed one is a compile error here
           // rather than a surprise in a customer's switch statement.
@@ -166,8 +166,8 @@ jobs:
           const badEvent: MentioraEvent = { type: 'nope' };
           // @ts-expect-error widgetOrigin is required
           const badConfig: MentioraConfig = { embedKey: 'pk_wgt_x' };
-          // @ts-expect-error not a StorageReason
-          const badReason: StorageReason = 'whatever';
+          // @ts-expect-error 'override' means storage WORKS: it can never accompany the event
+          const badReason: StorageUnavailableReason = 'override';
 
           export default { fetcher, events, config, props, badCode, badEvent, badConfig, badReason };
           TS

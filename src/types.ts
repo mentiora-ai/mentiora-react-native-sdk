@@ -27,18 +27,18 @@ export type MentioraIdentity = MentioraIdentityCallback | MentioraIdentityFetche
 export type MentioraErrorCode = 'load_failed' | 'handshake_timeout' | 'renderer_crashed';
 
 /**
- * Why `resolveStorage` picked the store it did. `override` and `peer-loaded`
- * persist; the other three are the in-memory fallback, and each names a
- * different fix: install the optional AsyncStorage peer (`peer-absent`), pass
- * `storage` explicitly because this build cannot auto-resolve a peer at all
+ * Why the SDK fell back to in-memory storage. Each value names a different
+ * fix: install the optional AsyncStorage peer (`peer-absent`), pass `storage`
+ * explicitly because this build cannot auto-resolve a peer at all
  * (`no-require`), or look at the store you passed (`load-threw`).
+ *
+ * Deliberately narrower than `storage.ts`'s internal `StorageReason`, which
+ * also has `'override'` and `'peer-loaded'`: those two mean storage WORKS, so
+ * they can never accompany a `storageUnavailable` event. Carrying them on the
+ * public union would hand every consumer two switch arms that are dead by
+ * construction, forever.
  */
-export type StorageReason =
-  | 'override'
-  | 'peer-loaded'
-  | 'peer-absent'
-  | 'no-require'
-  | 'load-threw';
+export type StorageUnavailableReason = 'peer-absent' | 'no-require' | 'load-threw';
 
 export type MentioraEvent =
   | { type: 'ready' }
@@ -54,7 +54,7 @@ export type MentioraEvent =
    * up only as inflated anonymous user counts — hence an event too. Emitted
    * once per embed key, not once per presentation.
    */
-  | { type: 'storageUnavailable'; reason: StorageReason };
+  | { type: 'storageUnavailable'; reason: StorageUnavailableReason };
 
 /** Overrides the AsyncStorage default used to persist the install id. */
 export interface MentioraStorage {
