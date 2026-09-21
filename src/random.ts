@@ -26,7 +26,7 @@ export type RandomSource = {
 
 export const RANDOM_REPLY_TAG = '__mentiora_random__';
 
-type RandomDeps = {
+export type RandomDeps = {
   inject: (script: string) => void;
   timeoutMs?: number; // default 2000
   now?: () => number;

@@ -58,6 +58,24 @@ export type HostHandlers = {
   onBackHandling: (active: boolean) => void;
 };
 
+/**
+ * A handler error that names its own JSON-RPC code. Any other throw is
+ * `-32603`, which is what the generic "handler threw" rule says (design.md
+ * §2.2) — but two answers in that spec are NOT generic: a denied URL is
+ * `-32003` and an unavailable identity is `-32002`, and neither is
+ * reachable if every rejection collapses to `Internal error`. The peer
+ * stays ignorant of what those domains mean; the composition root, which
+ * owns them, labels the throw.
+ */
+export class BridgeError extends Error {
+  readonly code: number;
+  constructor(code: number, message: string) {
+    super(message);
+    this.name = 'BridgeError';
+    this.code = code;
+  }
+}
+
 export type HostPeer = {
   receive: (raw: string) => Promise<void>;
   sendBack: () => void;
@@ -80,6 +98,11 @@ const extractRawId = (raw: string): string | undefined => {
   }
   return undefined;
 };
+
+const failure = (e: unknown): { code: number; message: string } =>
+  e instanceof BridgeError
+    ? { code: e.code, message: e.message }
+    : { code: ErrorCode.internalError, message: 'Internal error' };
 
 export const createHostPeer = (deps: {
   send: (raw: string) => void;
@@ -185,9 +208,10 @@ export const createHostPeer = (deps: {
           const result = await handlers.refreshIdentity();
           if (myGen !== generation) return;
           if (id !== undefined) sendResult(id, result);
-        } catch {
+        } catch (e) {
           if (myGen !== generation) return;
-          respondOrDrop(id, ErrorCode.internalError, 'Internal error');
+          const { code, message } = failure(e);
+          respondOrDrop(id, code, message);
         }
         return;
       }
@@ -200,9 +224,10 @@ export const createHostPeer = (deps: {
           await handlers.openUrl(message.params.url);
           if (myGen !== generation) return;
           if (id !== undefined) sendResult(id, null);
-        } catch {
+        } catch (e) {
           if (myGen !== generation) return;
-          respondOrDrop(id, ErrorCode.internalError, 'Internal error');
+          const { code, message } = failure(e);
+          respondOrDrop(id, code, message);
         }
         return;
       }

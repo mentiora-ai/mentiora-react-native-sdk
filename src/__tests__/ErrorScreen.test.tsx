@@ -24,8 +24,10 @@ test('a partial strings override replaces only what it names', async () => {
       strings={{ retry: 'Nochmal' }}
     />,
   );
-  expect(screen.getByText('Nochmal')).toBeTruthy();
-  expect(screen.getByText(DEFAULT_STRINGS.dismiss)).toBeTruthy();
+  // getByRole, not getByText: a component that dropped accessibilityLabel on the
+  // overridden-label path only would still render the visible text and pass.
+  expect(screen.getByRole('button', { name: 'Nochmal' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
 });
 
 test('an explicit undefined in strings falls back to the default, not a blank control', async () => {
@@ -60,6 +62,9 @@ test('every code renders the same sentence — the code is for onEvent, not for 
       <ErrorScreen code={code} onRetry={jest.fn()} onDismiss={jest.fn()} />,
     );
     expect(screen.getByText(DEFAULT_STRINGS.errorBody)).toBeTruthy();
+    // Present is not enough: a regression rendering <Text>{code}</Text> beside the
+    // body would pass on presence alone while leaking the code to the user (§2.9).
+    expect(screen.queryByText(code)).toBeNull();
     await view.unmount();
   }
 });

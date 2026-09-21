@@ -1,7 +1,7 @@
 import type React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { MentioraErrorCode } from '../types';
-import { DEFAULT_STRINGS, type MentioraStrings } from './strings';
+import type { MentioraErrorCode } from '../types.js';
+import { DEFAULT_STRINGS, type MentioraStrings } from './strings.js';
 
 export type ErrorScreenProps = {
   strings?: Partial<MentioraStrings>;

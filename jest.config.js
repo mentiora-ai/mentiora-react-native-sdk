@@ -9,6 +9,13 @@ module.exports = {
   // afterEach in jest.setup.ts needs the test framework installed, which only
   // setupFilesAfterEnv guarantees (setupFiles runs before it exists).
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
+  // Every source file imports its siblings with the `.js` extension TypeScript's
+  // ESM output requires — `lib/module` is `type: module`, where an extensionless
+  // specifier does not resolve. Jest resolves against the .ts/.tsx sources, so it
+  // needs the extension mapped back off.
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+  },
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?|react-native-webview|@react-native-async-storage)/)',
   ],

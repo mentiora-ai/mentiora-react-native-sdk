@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createHostPeer } from './peer.js';
+import { BridgeError, createHostPeer } from './peer.js';
 
 const result = {
   protocolVersion: 1,
@@ -266,4 +266,62 @@ test('work from a superseded load generation neither sends nor mutates', async (
   await inFlight;
   assert.equal(sent.length, 0, 'the old load must not answer into the new page');
   assert.equal(peer.sessionKey(), null, 'nor overwrite the new session');
+});
+
+// `-32003` (URL denied) and `-32002` (identity unavailable) are both required
+// answers (design.md §2.3, §2.6 and Revision 1), and neither is reachable while
+// every handler rejection collapses to `-32603`. The peer does not know what a
+// URL or an identity is, so the code rides on the throw.
+const peerThatThrows = (e: unknown) => {
+  const sent: string[] = [];
+  const peer = createHostPeer({
+    send: (raw) => sent.push(raw),
+    handlers: {
+      initialize: async () => result,
+      refreshIdentity: async () => {
+        throw e;
+      },
+      openUrl: async () => {
+        throw e;
+      },
+      onReady: () => {},
+      onClose: () => {},
+      onIdentityError: () => {},
+      onBackHandling: () => {},
+    },
+  });
+  return { peer, sent };
+};
+
+const initialized = async (peer: ReturnType<typeof peerThatThrows>['peer']) => {
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"r1","method":"mentiora/initialize","params":{"protocolVersion":1}}',
+  );
+};
+
+test('a BridgeError from openUrl answers with its own code, not -32603', async () => {
+  const { peer, sent } = peerThatThrows(new BridgeError(-32003, 'URL denied'));
+  await initialized(peer);
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"u1","method":"mentiora/openUrl","params":{"sessionKey":"sk-test","url":"javascript:alert(1)"}}',
+  );
+  assert.deepEqual(lastSent(sent).error, { code: -32003, message: 'URL denied' });
+});
+
+test('a BridgeError from refreshIdentity answers with its own code', async () => {
+  const { peer, sent } = peerThatThrows(new BridgeError(-32002, 'Identity unavailable'));
+  await initialized(peer);
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"r2","method":"mentiora/refreshIdentity","params":{"sessionKey":"sk-test"}}',
+  );
+  assert.deepEqual(lastSent(sent).error, { code: -32002, message: 'Identity unavailable' });
+});
+
+test('any other throw is still -32603 with the generic message', async () => {
+  const { peer, sent } = peerThatThrows(new Error('boom: /Users/someone/secret.ts'));
+  await initialized(peer);
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"u1","method":"mentiora/openUrl","params":{"sessionKey":"sk-test","url":"https://e.com"}}',
+  );
+  assert.deepEqual(lastSent(sent).error, { code: -32603, message: 'Internal error' });
 });
