@@ -49,6 +49,14 @@ test('an over-long url is denied rather than parsed', () => {
   assert.equal(isAllowedExternal(`https://e.com/${'a'.repeat(3000)}`), false);
 });
 
+test('isSameOrigin accepts a long, legitimately same-origin url -- no length bound here', () => {
+  // Resolution #5: the 2048 bound belongs to isAllowedExternal only. A long
+  // same-origin url is the widget's own navigation and must not be denied by someone
+  // later applying that bound file-wide.
+  const origin = 'https://widget.acme.mentiora.ai';
+  assert.equal(isSameOrigin(`${origin}/h/rn/k?state=${'a'.repeat(3000)}`, origin), true);
+});
+
 test('the CONFIGURED origin is normalised too, not just the url', () => {
   // A customer pasting their origin out of a dashboard can capitalise the host. If only
   // the url side were lowercased, every navigation would read cross-origin and the widget
@@ -68,6 +76,26 @@ test('an unparseable origin denies everything instead of matching everything', (
     assert.equal(isSameOrigin('https://widget.acme.mentiora.ai/x', origin), false, origin);
   }
   assert.equal(originOf('https://'), null);
+});
+
+test('isSameOrigin denies when BOTH sides are unparseable, not only one', () => {
+  // originOf('') and originOf('not-a-url') are both null. `a !== null && b !== null`
+  // is the guard that stops two nulls from reading as equal (a bare `a === b` would
+  // let `null === null` slip through as a false ACCEPT). Every other test in this
+  // file only ever invalidates the widgetOrigin side, leaving that guard untested.
+  assert.equal(isSameOrigin('', ''), false);
+  assert.equal(isSameOrigin('not-a-url', 'also-not-a-url'), false);
+  assert.equal(isSameOrigin('', 'not-a-url'), false);
+  assert.equal(isSameOrigin('https://', 'https://'), false);
+});
+
+test('originOf itself rejects a userinfo or backslash authority, not only through isSameOrigin', () => {
+  // isSameOrigin passing on these strings could equally mean "both sides parsed
+  // differently" as "originOf refused to parse the malformed side at all" -- since
+  // originOf is an exported, independently-relied-on contract, assert its null
+  // return directly rather than only through the two-sided comparison.
+  assert.equal(originOf('https://widget.acme.mentiora.ai@evil.com/x'), null);
+  assert.equal(originOf('https://widget.acme.mentiora.ai\\.evil.com/'), null);
 });
 
 // --- Adversarial cases beyond the brief ---
@@ -96,7 +124,7 @@ test('a URL-encoded @ or backslash does not decode into the raw separator', () =
   );
 });
 
-test('a null byte splitting "javascript:" is stripped by clean() and recombines, but the allow-list still denies it', () => {
+test('a null byte inside "javascript:" recombines under clean(), denied by the allow-list', () => {
   // clean() strips every C0 control anywhere in the string (it's a global replace,
   // not just a trim), so the embedded NUL disappears and 'java' + 'script:' fuse back
   // into 'javascript:' -- same mechanism as the brief's tab/newline case. It is denied
