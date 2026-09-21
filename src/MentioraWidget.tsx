@@ -84,6 +84,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Linking, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
+import { setBackHeld } from './back-hold.js';
 import { BridgeError, createHostPeer, type HostPeer } from './bridge/peer.js';
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
 import { isAllowedExternal, isSameOrigin } from './links.js';
@@ -415,6 +416,10 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
           latest.current.props.onEvent?.({ type: 'identityError', reason }),
         onBackHandling: (active) => {
           backHeld.current = active;
+          // Task 12: the presenter's Modal lives in a different component and
+          // can't reach this ref directly — `back-hold.ts` is the one channel
+          // it reads instead (never a new public prop/event on `MentioraConfig`).
+          setBackHeld(latest.current.props.embedKey, active);
         },
       },
       warn: (message) => {
@@ -563,6 +568,9 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     return () => {
       if (watchdogTimer.current !== null) clearTimeout(watchdogTimer.current);
       if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
+      // Task 12: an unmounted widget must not leave a stale "held" entry for
+      // the presenter's Modal (a different, still-mounted component) to read.
+      setBackHeld(latest.current.props.embedKey, false);
     };
   }, []);
 
