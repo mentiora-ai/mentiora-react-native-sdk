@@ -251,3 +251,44 @@ test('logout clears identity too, not only the install id', async () => {
   );
   assert.equal(store.get(wasSignedInKey('k')), undefined);
 });
+
+// Branch review, m5. `logout()` dropped the install-id memo and then awaited
+// the rotation, leaving a window in between: a mint landing there missed the
+// memo, read storage before `removeItem` had landed, and both returned AND
+// re-memoised the pre-rotation id — the previous user's, handed to the next
+// one, which is the exact thing dropping the memo was there to prevent. The
+// comment claimed the opposite ("reads storage fresh, past the rotation").
+test('an installId() landing mid-logout waits for the rotation instead of reading past it', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  let land!: () => void;
+  const landed = new Promise<void>((r) => {
+    land = r;
+  });
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    // A rotation that takes a moment — AsyncStorage is a real round trip to
+    // native, so this window is not hypothetical.
+    removeItem: async (k: string) => {
+      await landed;
+      store.delete(k);
+    },
+  };
+
+  const rt = getRuntime({ ...cfg('race'), storage });
+  const before = await rt.installId(bytes);
+
+  const loggingOut = rt.logout(); // not awaited: we want the window it opens
+  const racing = rt.installId(bytes); // lands inside it
+  land();
+  await loggingOut;
+
+  assert.notEqual(
+    await racing,
+    before,
+    "the previous user's install id must not survive the logout that rotated it",
+  );
+});

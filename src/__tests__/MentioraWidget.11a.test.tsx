@@ -478,3 +478,15 @@ test('one degraded store is reported once per embed key, not once per presentati
     warn.mockRestore();
   }
 });
+
+// Branch review, m3. `embedKey` is customer input dropped into a URL path
+// segment, and dropping `encodeURIComponent` was fully green — nothing
+// asserted the encoding at all. The failure it prevents is a key containing
+// `/` or `?` silently loading a different path (or a different origin's
+// query) instead of the widget.
+test('embedKey is percent-encoded into its one path segment', async () => {
+  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey="pk wgt/../x?y#z" />);
+  expect(screen.getByTestId('mentiora-webview').props.source).toEqual({
+    uri: `${ORIGIN}/h/rn/pk%20wgt%2F..%2Fx%3Fy%23z`,
+  });
+});

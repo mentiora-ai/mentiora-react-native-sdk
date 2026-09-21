@@ -325,3 +325,42 @@ test('any other throw is still -32603 with the generic message', async () => {
   );
   assert.deepEqual(lastSent(sent).error, { code: -32603, message: 'Internal error' });
 });
+
+// Branch review, m1. The session-key check on page->host RESPONSES was
+// entirely uncovered — replacing its condition with `if (false)` left the
+// whole suite green. `fixtures.test.ts` replays `unknown-method`'s response
+// through a peer whose key already matches, so it only ever walks the accept
+// side. design.md §2.2 makes this a MUST ("reject any page -> host message —
+// request, notification OR response — whose params.sessionKey does not
+// match"), and it is the one of the three with no other guard behind it.
+test('a page-sent response with a wrong session key is rejected with -32001', async () => {
+  const { peer, sent } = makePeer();
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"r1","method":"mentiora/initialize","params":{"protocolVersion":1}}',
+  );
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"h2","error":{"code":-32601,"message":"Method not found"},"params":{"sessionKey":"sk-forged"}}',
+  );
+  const out = lastSent(sent);
+  assert.equal(out.id, 'h2');
+  assert.deepEqual(out.error, {
+    code: -32001,
+    message: 'Unauthorized',
+    data: { reason: 'missing_session_key' },
+  });
+});
+
+test('a page-sent response with the RIGHT session key is accepted in silence', async () => {
+  // The other half: a peer that answered -32001 to every response would pass
+  // the test above just as happily, and would break the `unknown-method`
+  // host-role fixture in production.
+  const { peer, sent } = makePeer();
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"r1","method":"mentiora/initialize","params":{"protocolVersion":1}}',
+  );
+  const before = sent.length;
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"h2","error":{"code":-32601,"message":"Method not found"},"params":{"sessionKey":"sk-test"}}',
+  );
+  assert.equal(sent.length, before, 'a matching response is routed nowhere and answered nothing');
+});

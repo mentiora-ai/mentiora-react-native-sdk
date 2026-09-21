@@ -876,7 +876,15 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *  the WebView but does not touch `backHeld` or the peer, so without this
    *  check a page that claimed the button before a late handshake would
    *  leave the BackHandler subscription (still live; only the WebView is
-   *  unmounted) intercepting every press behind a blank `<View />`. */
+   *  unmounted) intercepting every press behind a blank `<View />`.
+   *
+   *  `dismissed` is redundant AS OF C1 and kept deliberately: the only way
+   *  `errorCode` goes back to null is `restartLoad`, which now runs
+   *  `advanceGeneration` and so clears `backHeld` and the session key — so no
+   *  reachable state has `dismissed` true, `errorCode` null and a live hold
+   *  at once, and no non-vacuous test can distinguish the two checks. It
+   *  stays because it is one token wide and it is what keeps the pair safe if
+   *  a later change clears the surface without crossing a load boundary. */
   const onHardwareBack = useCallback((): boolean => {
     if (dismissed || errorCode !== null) return false;
     if (backHeld.current && peer.sessionKey() !== null) {

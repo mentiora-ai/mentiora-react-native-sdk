@@ -299,7 +299,12 @@ test('Dismiss emits close and stops rendering the WebView, with nothing else con
   }
   await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss }));
   expect(onEvent).toHaveBeenCalledWith({ type: 'close' });
-  expect(screen.queryByTestId('mentiora-webview')).toBeNull();
+  // `includeHiddenElements`, as at `presenter.test.tsx`'s equivalent (branch
+  // review, m6): under a Dismiss that failed to unmount, the WebView would
+  // still be `importantForAccessibility="no-hide-descendants"` beneath the
+  // overlay, which RNTL's queries exclude by default — a plain
+  // `queryByTestId` would read `null` and pass vacuously.
+  expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
   expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
 });
 

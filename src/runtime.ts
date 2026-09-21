@@ -74,9 +74,22 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   // concurrent caller piggybacks on that promise rather than opening a second
   // request on anyone's source.
   let inFlight: Promise<string> | undefined;
+  // Set for the duration of a `logout()`'s rotation, and awaited by every new
+  // mint. Dropping the memo alone (what `logout` used to do) leaves a window
+  // between "the memo is gone" and "`removeItem` has landed": a call arriving
+  // there misses the memo, reads storage before the rotation, and both returns
+  // AND re-memoises the PRE-rotation id — the previous user's, handed to the
+  // next one, which is the exact thing dropping the memo was for (branch
+  // review, m5). `await undefined` is a no-op, so the normal path pays a
+  // microtask and nothing else.
+  let rotation: Promise<void> | undefined;
   const installId = (randomBytes: RandomBytes): Promise<string> => {
     if (!inFlight) {
-      inFlight = loadOrCreateInstallId({ storage, embedKey, randomBytes }).finally(() => {
+      const pendingRotation = rotation;
+      inFlight = (async () => {
+        await pendingRotation;
+        return await loadOrCreateInstallId({ storage, embedKey, randomBytes });
+      })().finally(() => {
         inFlight = undefined;
       });
     }
@@ -102,14 +115,17 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
     storage: { ephemeral: resolved.ephemeral, reason: resolved.reason, detail: resolved.detail },
     onReload,
     logout: async () => {
-      // Drop the memo first: an installId() in flight when logout runs must
-      // not resolve to the pre-rotation id once logout has finished. Clearing
-      // the memo before rotating means any caller awaiting the *old* in-flight
-      // promise still gets what was already committed (the pre-rotation id —
-      // it already read from storage), but every NEW installId() call after
-      // this point misses the memo and reads storage fresh, past the rotation.
+      // Drop the memo AND park every new mint behind the rotation: a caller
+      // awaiting the *old* in-flight promise still gets what was already
+      // committed (the pre-rotation id — it already read from storage), while
+      // every NEW installId() call from this point on waits for the rotation
+      // to land before it reads storage. `rotation` is assigned before the
+      // first await, so it is already visible to anything that calls
+      // `installId()` after `logout()` returns its promise.
       inFlight = undefined;
-      await rotateInstallId({ storage, embedKey });
+      rotation = rotateInstallId({ storage, embedKey });
+      await rotation;
+      rotation = undefined;
       // clear() rejects if the wasSignedIn flag removal fails. Rotate first,
       // then clear: if clear() throws, the install id is already anonymous
       // (rotated), so the flag is the only thing left inconsistent, and the
