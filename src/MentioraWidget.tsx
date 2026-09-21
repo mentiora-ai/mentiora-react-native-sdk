@@ -33,7 +33,6 @@ import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
 import { BridgeError, createHostPeer, type HostPeer } from './bridge/peer.js';
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
-import { IdentityUnavailable } from './identity.js';
 import { isAllowedExternal, isSameOrigin } from './links.js';
 import { createRandomSource, type RandomDeps, type RandomSource, toBase64Url } from './random.js';
 import { getRuntime, type MentioraRuntime } from './runtime.js';
@@ -109,7 +108,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // `runtime.identity` live for the same reason — a local copy goes stale after
   // a reconfigure and this widget keeps calling a provider nobody is configured
   // to use.
-  const runtime = getRuntime(props, randomSource.bytes);
+  const runtime = getRuntime(props);
 
   // The peer and the navigation handlers are built once and outlive any prop
   // change, so they read the current props and runtime through this box rather
@@ -141,9 +140,21 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       send: (raw) => webview.current?.injectJavaScript(injection(raw)),
       handlers: {
         initialize: async () => {
+          // The session key comes first and alone: it shares the single-in-flight
+          // random source with the install id, so those two cannot overlap. But
+          // identity never touches `randomBytes`, and serialising all three spends
+          // 2 s + 2 s + BOOT_RETRY_POLICY's 4 s = exactly the 8 s the page bounds
+          // the handshake by (design.md:238) — a slow identity endpoint would then
+          // surface as 11b's `handshake_timeout` instead of chat. Overlapping the
+          // last two gives up to 2 s of that back.
           const sessionKey = toBase64Url(await randomSource.bytes(SESSION_KEY_BYTES));
           const { runtime: live } = latest.current;
-          const installId = await live.installId();
+          const [installId, identityToken] = await Promise.all([
+            // The runtime is shared across widgets, so it is handed THIS WebView's
+            // source per call rather than owning one (runtime.ts).
+            live.installId(randomSource.bytes),
+            live.identity.initial(),
+          ]);
           // Never `-32005`, whatever version the page asked for: we answer our
           // own, so a frozen v0 binary can still serve a future page that lists
           // v1 among its versions (design.md §2.2, Revision 1).
@@ -151,23 +162,28 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
             protocolVersion: PROTOCOL_VERSION,
             sessionKey,
             installId,
-            identityToken: await live.identity.initial(),
+            identityToken,
             sdk: { name: SDK_NAME, version: SDK_VERSION },
           };
         },
         refreshIdentity: async () => {
           try {
             return { identityToken: await latest.current.runtime.identity.refresh() };
-          } catch (e) {
-            if (e instanceof IdentityUnavailable) {
-              throw new BridgeError(ErrorCode.identityUnavailable, 'Identity unavailable');
-            }
-            throw e;
+          } catch {
+            // EVERY rejection, not just `IdentityUnavailable`. `refresh()` has one
+            // job, so any way it can fail means the same thing to the page, and
+            // `-32002` is the answer design.md:238 asks for. Narrowing to the one
+            // class would make a future plain `throw` inside identity.ts silently
+            // downgrade to `-32603`, which the page reads as a bug on our side
+            // rather than as "ask again later".
+            throw new BridgeError(ErrorCode.identityUnavailable, 'Identity unavailable');
           }
         },
         openUrl: openExternal,
         onReady: () => latest.current.props.onEvent?.({ type: 'ready' }),
         onClose: () => latest.current.props.onEvent?.({ type: 'close' }),
+        // `reason` only: the handler's second argument is the page's own message
+        // text and MentioraEvent deliberately does not carry it (types.ts).
         onIdentityError: (reason) =>
           latest.current.props.onEvent?.({ type: 'identityError', reason }),
         // Task 11c owns the BackHandler and the release protocol.

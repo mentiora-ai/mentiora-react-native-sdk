@@ -4,7 +4,7 @@
 // modules below meets another, so these tests are integration tests by nature —
 // a real peer, a real random source, a real runtime, and the mock WebView as the
 // only stand-in.
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Linking } from 'react-native';
 import {
   __lastWebView,
@@ -124,12 +124,21 @@ test('every injected script ends in true; or injectJavaScript fails silently', a
 });
 
 test('the random reply is taken by the router and never reaches the peer', async () => {
-  const el = await mount();
-  await answerRandom(el);
-  // A stray random reply with no request outstanding is swallowed, not answered
-  // as a malformed JSON-RPC message.
-  expect(sent()).toHaveLength(0);
-  expect(scripts()).toHaveLength(0);
+  // Zero injections proves nothing on its own: a `{tag, bytes}` payload reaching
+  // `peer.receive` ALSO sends nothing — `parseInbound` returns null, there is no
+  // string `id` to answer into, and `respondOrDrop` warns and drops. The peer's
+  // `warn` is the only positive evidence of whether it saw the message at all,
+  // and this component routes it to `console.warn` under __DEV__.
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const el = await mount();
+    await answerRandom(el);
+    expect(warn).not.toHaveBeenCalled();
+    expect(sent()).toHaveLength(0);
+    expect(scripts()).toHaveLength(0);
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 test('without host WebCrypto the session key comes from the page, over two round trips', async () => {
@@ -185,7 +194,10 @@ test('a same-origin sub-frame navigation does NOT clear the session key', async 
     },
   });
   await waitForSent(2);
-  expect(sent().at(-1)).not.toMatchObject({ error: { code: -32001 } });
+  // The positive result, not `not.toMatchObject({error:{code:-32001}})`, which
+  // would also pass on -32602 or -32603 — i.e. on the session key surviving but
+  // everything else being broken.
+  expect(sent().at(-1)).toMatchObject({ id: 'u1', result: null });
 });
 
 test('an allowed top-frame navigation is a load boundary and resets the session', async () => {
@@ -244,9 +256,12 @@ test('a denied non-https navigation is never handed to the OS either', async () 
     isTopFrame: true,
   });
   expect(allowed).toBe(false);
-  await waitFor(() => {
-    expect(openURL).not.toHaveBeenCalled();
-  });
+  // NOT `waitFor(() => expect(…).not.toHaveBeenCalled())`: a negative passes on
+  // waitFor's first synchronous evaluation and returns immediately, so it never
+  // waits and an implementation calling Linking one microtask later slips
+  // through. `openExternal` is async; flush it, then assert.
+  await act(async () => {});
+  expect(openURL).not.toHaveBeenCalled();
 });
 
 test('onOpenWindow routes through the same external gate', async () => {

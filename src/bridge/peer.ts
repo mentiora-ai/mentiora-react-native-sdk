@@ -66,10 +66,14 @@ export type HostHandlers = {
  * reachable if every rejection collapses to `Internal error`. The peer
  * stays ignorant of what those domains mean; the composition root, which
  * owns them, labels the throw.
+ *
+ * The `message` is SENT TO THE PAGE verbatim, unlike the generic `-32603`
+ * answer, so it must be a fixed literal — never an upstream error's text, a
+ * URL, a token or anything else the page did not already have.
  */
 export class BridgeError extends Error {
-  readonly code: number;
-  constructor(code: number, message: string) {
+  readonly code: ErrorCode;
+  constructor(code: ErrorCode, message: string) {
     super(message);
     this.name = 'BridgeError';
     this.code = code;

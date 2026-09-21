@@ -18,8 +18,13 @@ import { loadOrCreateInstallId, rotateInstallId } from './install-id.js';
 import { resolveStorage, type StorageReason } from './storage.js';
 import type { MentioraConfig, MentioraIdentity, MentioraStorage } from './types.js';
 
+/** 16 random bytes, from the WebView that is asking. */
+export type RandomBytes = (n: number) => Promise<Uint8Array>;
+
 export type MentioraRuntime = {
-  installId: () => Promise<string>; // single-flight
+  /** Single-flight, and it takes the CALLER's random source rather than one
+   *  captured when the runtime was built (see `installId` below). */
+  installId: (randomBytes: RandomBytes) => Promise<string>;
   identity: IdentityProvider;
   /** From Task 6's `resolveStorage`. `reason` is carried, not just the boolean: the
    *  composition root's __DEV__ warning must be able to say "this build cannot
@@ -47,10 +52,7 @@ export const __resetRuntimes = (): void => {
   runtimes.clear();
 };
 
-const buildEntry = (
-  config: MentioraConfig,
-  randomBytes: (n: number) => Promise<Uint8Array>,
-): RuntimeEntry => {
+const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   const { embedKey } = config;
   const resolved = resolveStorage(config.storage);
   const { storage } = resolved;
@@ -58,8 +60,21 @@ const buildEntry = (
   // Single-flight: memoise the IN-FLIGHT PROMISE, not the resolved value.
   // Memoising only the value still lets two concurrent first callers race
   // past the "is there one already" check before either has written one.
+  //
+  // `randomBytes` is a PARAMETER, not something captured here. Random bytes
+  // come from a WebView (design.md §2.1) and a WebView belongs to one mounted
+  // widget, while this runtime is shared by every widget on the embed key
+  // (§2.4) — so a source captured at build time is the FIRST widget's source
+  // forever. With two widgets and a first launch, widget B's mint would inject
+  // into widget A's page: rejected outright while A's own session-key request
+  // is still outstanding (`random.ts`, one request in flight at a time), or
+  // simply lost once A has unmounted. The install id is single-flight, so that
+  // one failure fails both handshakes. Taking the source per call means the
+  // caller that triggers the mint always uses its own live page, and a
+  // concurrent caller piggybacks on that promise rather than opening a second
+  // request on anyone's source.
   let inFlight: Promise<string> | undefined;
-  const installId = (): Promise<string> => {
+  const installId = (randomBytes: RandomBytes): Promise<string> => {
     if (!inFlight) {
       inFlight = loadOrCreateInstallId({ storage, embedKey, randomBytes }).finally(() => {
         inFlight = undefined;
@@ -134,10 +149,7 @@ const buildEntry = (
  *  runtime already minted into the old store, and no caller has a reason to.
  *  `MentioraRuntime.storage` is therefore a build-time snapshot and stays
  *  accurate only while that holds — relax this and it goes stale. */
-export const getRuntime = (
-  config: MentioraConfig,
-  randomBytes: (n: number) => Promise<Uint8Array>,
-): MentioraRuntime => {
+export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
   const existing = runtimes.get(config.embedKey);
   if (existing) {
     if (existing.identityRef !== config.identity) {
@@ -150,7 +162,7 @@ export const getRuntime = (
     }
     return existing.runtime;
   }
-  const entry = buildEntry(config, randomBytes);
+  const entry = buildEntry(config);
   runtimes.set(config.embedKey, entry);
   return entry.runtime;
 };
