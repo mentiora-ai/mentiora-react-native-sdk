@@ -366,39 +366,69 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
           // arrives in. A page that posts `initialize` at 7.9s must disarm the
           // 8s watchdog before it can race a handshake that is about to
           // succeed (11b, "one recovery coordinator per load generation").
-          // A page that reaches this point at all is proof of life for every
-          // ladder, not just the watchdog's — reset the network and crash
-          // counters too, so a transient blip long ago does not count against
-          // a page that has since loaded cleanly.
           clearWatchdogTimer();
-          networkFailures.current = 0;
-          crashFailures.current = 0;
-          handshakeTimeouts.current = 0;
-          // The session key comes first and alone: it shares the single-in-flight
-          // random source with the install id, so those two cannot overlap. But
-          // identity never touches `randomBytes`, and serialising all three spends
-          // 2 s + 2 s + BOOT_RETRY_POLICY's 4 s = exactly the 8 s the page bounds
-          // the handshake by (design.md:238) — a slow identity endpoint would then
-          // surface as 11b's `handshake_timeout` instead of chat. Overlapping the
-          // last two gives up to 2 s of that back.
-          const sessionKey = toBase64Url(await randomSource.bytes(SESSION_KEY_BYTES));
-          const { runtime: live } = latest.current;
-          const [installId, identityToken] = await Promise.all([
-            // The runtime is shared across widgets, so it is handed THIS WebView's
-            // source per call rather than owning one (runtime.ts).
-            live.installId(randomSource.bytes),
-            live.identity.initial(),
-          ]);
-          // Never `-32005`, whatever version the page asked for: we answer our
-          // own, so a frozen v0 binary can still serve a future page that lists
-          // v1 among its versions (design.md §2.2, Revision 1).
-          return {
-            protocolVersion: PROTOCOL_VERSION,
-            sessionKey,
-            installId,
-            identityToken,
-            sdk: { name: SDK_NAME, version: SDK_VERSION },
-          };
+          // Captured before the first await, so a handler whose document has
+          // since been replaced mutates nothing — the same rule `peer.receive`
+          // keeps for its own sends (§2.2: "work from the old generation may
+          // neither mutate state nor send").
+          const myGen = generation.current;
+          try {
+            // The session key comes first and alone: it shares the single-in-flight
+            // random source with the install id, so those two cannot overlap. But
+            // identity never touches `randomBytes`, and serialising all three spends
+            // 2 s + 2 s + BOOT_RETRY_POLICY's 4 s = exactly the 8 s the page bounds
+            // the handshake by (design.md:238) — a slow identity endpoint would then
+            // surface as 11b's `handshake_timeout` instead of chat. Overlapping the
+            // last two gives up to 2 s of that back.
+            const sessionKey = toBase64Url(await randomSource.bytes(SESSION_KEY_BYTES));
+            const { runtime: live } = latest.current;
+            const [installId, identityToken] = await Promise.all([
+              // The runtime is shared across widgets, so it is handed THIS WebView's
+              // source per call rather than owning one (runtime.ts).
+              live.installId(randomSource.bytes),
+              live.identity.initial(),
+            ]);
+            // A page that gets THIS FAR is proof of life for every ladder, not
+            // just the watchdog's — so a transient blip long ago does not count
+            // against a page that has since loaded cleanly. Reset here, on the
+            // success path, and never at the top of the handler: a handler that
+            // is about to reject has proved nothing, and zeroing the watchdog's
+            // own counter on the way to failing turns the catch below into an
+            // unbounded reload loop rather than the one-reload-then-error path
+            // it hands the incident to.
+            if (generation.current === myGen) {
+              networkFailures.current = 0;
+              crashFailures.current = 0;
+              handshakeTimeouts.current = 0;
+            }
+            // Never `-32005`, whatever version the page asked for: we answer our
+            // own, so a frozen v0 binary can still serve a future page that lists
+            // v1 among its versions (design.md §2.2, Revision 1).
+            return {
+              protocolVersion: PROTOCOL_VERSION,
+              sessionKey,
+              installId,
+              identityToken,
+              sdk: { name: SDK_NAME, version: SDK_VERSION },
+            };
+          } catch (e) {
+            // Branch review, C2. The watchdog above is disarmed SYNCHRONOUSLY —
+            // correct for the 7.9s race it was written for, fatal when the
+            // handler then rejects: the peer answers `-32603` and keeps its
+            // latch (so a page that retries `initialize` gets `-32600`),
+            // `handled` is still false so no ladder has claimed the incident,
+            // and nothing re-arms the watchdog because `onLoadEnd` already
+            // fired for this document and will not fire again. That leaves the
+            // widget permanently dead with no surface, no event and no way
+            // back — for exactly the case §2.3 names (a signed-in install whose
+            // token endpoint is down, where the handshake MUST fail into §2.9's
+            // Retry screen rather than answer without a token), and equally for
+            // a `bytes()` timeout (§2.1) or a storage rejection. Re-arming hands
+            // the incident to the watchdog's own one-reload-then-error path,
+            // which ends at that screen.
+            if (generation.current === myGen) armWatchdog();
+            throw e;
+          }
         },
         refreshIdentity: async () => {
           try {

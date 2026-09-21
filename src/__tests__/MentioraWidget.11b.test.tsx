@@ -38,6 +38,14 @@ afterEach(() => {
 // `advanceTimersByTimeAsync`, never the synchronous `advanceTimersByTime`).
 const advance = (ms: number) => act(async () => jest.advanceTimersByTimeAsync(ms));
 
+// Everything this component injected that is a bridge message, parsed back
+// out (11a/11c use the same shape).
+const sent = (): Record<string, unknown>[] =>
+  (__lastWebView().injectJavaScript as jest.Mock).mock.calls.flatMap(([script]: [string]) => {
+    const m = /window\.mentioraHost\.receive\((.*)\);\s*true;\s*$/s.exec(script);
+    return m ? [JSON.parse(JSON.parse(m[1] as string) as string) as Record<string, unknown>] : [];
+  });
+
 const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion = 1) =>
   fireEvent(el, 'message', {
     nativeEvent: {
@@ -102,15 +110,24 @@ test('a valid initialize clears the watchdog synchronously — before the random
   // the round trip, or in an effect — the rejection would skip straight past
   // that line, the mount-armed watchdog (8s) would still be live, and it
   // would fire at 8s regardless of the 30s this test advances past that. The
-  // ONLY way `reload()` stays uncalled here is a clear that already happened
-  // synchronously, before the await, the moment the request was accepted.
+  // ONLY way `reload()` stays uncalled at 9s here is a clear that already
+  // happened synchronously, before the await, the moment the request was
+  // accepted.
+  //
+  // What DOES fire, at ~10s, is the watchdog the handler's own catch re-arms
+  // once that round trip rejects (branch review, C2) — a rejected handshake is
+  // an incident with an owner now, not a dead widget. The two are told apart
+  // by WHEN: the mount-armed watchdog would fire at 8s, the re-armed one at
+  // 2s (the round trip's own timeout) + 8s.
   const realCrypto = globalThis.crypto;
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
   try {
     const el = await mount();
     await initialize(el);
-    await advance(30000);
+    await advance(9000);
     expect(__lastWebView().reload).not.toHaveBeenCalled();
+    await advance(2000);
+    expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
   } finally {
     Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
   }
@@ -283,4 +300,60 @@ test('Dismiss emits close and stops rendering the WebView, with nothing else con
   expect(onEvent).toHaveBeenCalledWith({ type: 'close' });
   expect(screen.queryByTestId('mentiora-webview')).toBeNull();
   expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
+});
+
+// Branch review, C2. `clearWatchdogTimer()` is the `initialize` handler's
+// first statement, disarmed synchronously before the handler can fail — so a
+// handler that REJECTS used to leave the widget permanently dead: the peer
+// answers -32603 and keeps its latch, `handled` is still false so no ladder
+// has claimed the incident, and `onLoadEnd` has already fired for this
+// document and will not fire again, so nothing re-arms the watchdog. No
+// surface, no event, no Retry, no Dismiss.
+//
+// The trigger here is the one §2.3 names in so many words: a signed-in
+// install (`mentiora.wasSignedIn.<embedKey>` set) whose token endpoint is
+// down. `identity.initial()` must fail the handshake rather than answer
+// without a token, and "fail the handshake" is only a real answer if the
+// failure lands somewhere the user can see.
+//
+// Catches the single-line deletion of `armWatchdog()` from the handler's
+// catch: without it, `onEvent` is never called at all and no button renders.
+test('an initialize handler that rejects ends at the error surface, not a dead widget', async () => {
+  const onEvent = jest.fn();
+  const store = new Map<string, string>([[`mentiora.wasSignedIn.${KEY}`, '1']]);
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      store.delete(k);
+    },
+  };
+  await render(
+    <MentioraWidget
+      widgetOrigin={ORIGIN}
+      embedKey={KEY}
+      onEvent={onEvent}
+      storage={storage}
+      identity={{ getToken: () => Promise.reject(new Error('token endpoint down')) }}
+    />,
+  );
+  const el = screen.getByTestId('mentiora-webview');
+  await initialize(el);
+  // Past the boot ladder's own sleeps (BOOT_RETRY_POLICY: 2 attempts, <=500ms
+  // between), then past both watchdog cycles — one silent reload, then the
+  // give-up branch.
+  await advance(20000);
+
+  // The handler really did reject, rather than never being reached: -32603 is
+  // what the peer answers a throwing handler with. Without this the test would
+  // also pass for a page that never sent `initialize` at all, which is the
+  // ordinary watchdog case and proves nothing about the catch.
+  expect(sent().some((m) => (m.error as { code?: number } | undefined)?.code === -32603)).toBe(
+    true,
+  );
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
 });
