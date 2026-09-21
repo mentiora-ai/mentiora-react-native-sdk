@@ -17,10 +17,7 @@
     "chat",
     "mentiora"
   ],
-  "sideEffects": [
-    "**/presenter.js",
-    "**/presenter.tsx"
-  ],
+  "sideEffects": false,
   "source": "src/index.ts",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",

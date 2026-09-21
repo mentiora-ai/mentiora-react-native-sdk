@@ -12,7 +12,7 @@ import {
 } from '../../__mocks__/react-native-webview';
 import { __resetBackHold } from '../back-hold';
 import { MentioraWidget } from '../MentioraWidget';
-import { __composedProviderForTest, Mentiora, MentioraPresenterHost } from '../presenter';
+import { __resetPresenter, Mentiora, MentioraHost } from '../presenter';
 import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes, getRuntime } from '../runtime';
 
@@ -24,6 +24,7 @@ beforeEach(() => {
   __resetRuntimes();
   __resetWebViews();
   __resetBackHold();
+  __resetPresenter();
   Mentiora.close();
 });
 
@@ -127,7 +128,7 @@ const driveToHandshakeTimeout = async (): Promise<void> => {
 
 test('open presents a Modal and close dismisses it', async () => {
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   expect(screen.queryByTestId('mentiora-webview')).toBeNull();
   await act(async () => {
     await Mentiora.open();
@@ -141,9 +142,11 @@ test('open presents a Modal and close dismisses it', async () => {
 
 test('open works with no widget mounted anywhere — that is the whole point', async () => {
   // design.md:117-121 shows configure() + open() standing alone, and :414's example app
-  // puts the button on a different screen from the embedded tab.
+  // puts the button on a different screen from the embedded tab. (A <MentioraHost />
+  // still has to be mounted somewhere — fix round 1 replaced the AppRegistry-wrapper
+  // approach that made even that automatic — but no INLINE <MentioraWidget /> is needed.)
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
@@ -154,6 +157,42 @@ test('open before configure throws a clear error naming the missing call', async
   await expect(Mentiora.open()).rejects.toThrow(/configure/);
 });
 
+test('open throws a distinct error naming MentioraHost when configured but no host is mounted', async () => {
+  // A customer who configured but forgot to mount the host learns THAT, not
+  // "call configure()" again — a customer who did neither gets the configure
+  // message instead (checked above), since that's the more fundamental gap.
+  Mentiora.configure(cfg);
+  await expect(Mentiora.open()).rejects.toThrow(/MentioraHost/);
+});
+
+test('open works once a MentioraHost is mounted', async () => {
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  expect(screen.getByTestId('mentiora-webview')).toBeTruthy();
+});
+
+test('two mounted hosts never render two Modals — the oldest-mounted one owns it', async () => {
+  // Only one is ever expected in practice (one `<MentioraHost />`, once, at
+  // the app root) — this is the "briefly two during a screen transition"
+  // case, and the rule is a total order (oldest-mounted wins) rather than
+  // "last wins" or "undefined", so it never shows two Modals, even for one
+  // frame.
+  Mentiora.configure(cfg);
+  await render(
+    <>
+      <MentioraHost />
+      <MentioraHost />
+    </>,
+  );
+  await act(async () => {
+    await Mentiora.open();
+  });
+  expect(screen.getAllByTestId('mentiora-webview')).toHaveLength(1);
+});
+
 test('close before configure is a no-op, not a throw', () => {
   expect(() => {
     Mentiora.close();
@@ -162,7 +201,7 @@ test('close before configure is a no-op, not a throw', () => {
 
 test('reopening remounts the WebView — the reload is intended, not a bug', async () => {
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
@@ -198,7 +237,7 @@ test('logout with the Modal closed and no inline widget rotates state and does n
 
 test('after a closed-state logout the next open initializes with the rotated install id', async () => {
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
@@ -216,9 +255,29 @@ test('after a closed-state logout the next open initializes with the rotated ins
   expect(after).not.toBe(before);
 });
 
+test('onRequestClose forwards mentiora/back to the page while it holds the button, and stays open', async () => {
+  // Fix round 1: a boolean alone left the page never told a press happened,
+  // so it could never release the hold — back was dead for the life of the
+  // Modal, the exact trap 11b/11c both exist to close. This asserts the
+  // notification actually reached the page, the way 11c's own back tests do.
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  const el = screen.getByTestId('mentiora-webview');
+  await handshake(el);
+  await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
+  await act(async () => {
+    requestClose();
+  });
+  expect(sent().at(-1)).toMatchObject({ method: 'mentiora/back' });
+  expect(screen.getByTestId('mentiora-webview')).toBeTruthy(); // still open
+});
+
 test('onRequestClose dismisses only once the page released the back button', async () => {
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
@@ -241,7 +300,7 @@ test('onRequestClose dismisses even while the page holds back, once the error su
   // MentioraWidget.tsx:514-516 shows the watchdog's give-up branch calls showError
   // WITHOUT advanceGeneration, so a late initialize can claim back after the surface.
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
@@ -257,7 +316,7 @@ test('onRequestClose dismisses even while the page holds back, once the error su
 
 test('the presenter unsubscribes from runtime.onReload when the Modal closes', async () => {
   Mentiora.configure(cfg);
-  await render(<MentioraPresenterHost />);
+  await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
@@ -266,27 +325,4 @@ test('the presenter unsubscribes from runtime.onReload when the Modal closes', a
   });
   // A logout with nothing mounted must not call into a dead subscriber.
   await expect(Mentiora.logout()).resolves.toBeUndefined();
-});
-
-test('the wrapper provider is composed, never overwritten', () => {
-  // A library that grabs the single global slot unconditionally breaks whichever
-  // other library also wants it.
-  //
-  // Deviates from the brief's own `jest.isolateModules(() => require('../presenter'))`
-  // version: proven empirically (and structurally — there is no getter for
-  // "whichever provider is currently installed", only the setter, so nothing
-  // can read one back regardless) that `jest.isolateModules` hands the
-  // isolated `require('../presenter')` a completely fresh copy of
-  // 'react-native' too, with its own independent `AppRegistry` and no
-  // connection to `previous`, which is set on the OUTER, already-cached
-  // instance — so `previous` can never be invoked that way, for ANY
-  // implementation. What IS reachable through the public API, and what this
-  // module actually guarantees, is the other direction: a provider
-  // registered — through the setter THIS module has already patched, by the
-  // time this test runs — gets composed in rather than dropped.
-  const previous = jest.fn(() => null);
-  const { AppRegistry } = require('react-native');
-  AppRegistry.setWrapperComponentProvider(previous);
-  __composedProviderForTest()({});
-  expect(previous).toHaveBeenCalled();
 });
