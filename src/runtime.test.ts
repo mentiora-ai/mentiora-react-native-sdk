@@ -133,7 +133,7 @@ test('swapping identity does not clear the wasSignedIn flag — that is not a lo
 // WebViews, and `random.ts` allows exactly one request in flight per source —
 // so a source captured when the runtime was built is a source that belongs to
 // somebody else, and is very often busy or gone.
-test("a mint uses the calling widget's random source, not another widget's busy one", async () => {
+test('single-flight covers the second caller, and a busy source is never touched', async () => {
   __resetRuntimes();
   // No real timers: an unanswered request must not arm a 2s timeout that keeps
   // the test runner alive (and then rejects into nothing).
@@ -165,5 +165,55 @@ test("a mint uses the calling widget's random source, not another widget's busy 
     aCalls,
     0,
     "A's busy source must never be asked: single-flight covers the second caller",
+  );
+});
+
+// `Promise.all` evaluates its array elements synchronously, so in the test above the
+// first call wins BY CALL ORDER, not by caller identity — it cannot tell "forward this
+// call's source" from "remember whichever source arrived first". A `buildEntry` that
+// captured the first `randomBytes` function it was ever handed and reused it forever
+// would still pass every assertion above. This drives two SEPARATE, sequential mints —
+// with `logout()` between them to clear the memo — and checks the SECOND source is the
+// one actually invoked and the one whose bytes come back, which a capture-once mutant
+// cannot satisfy.
+test("a later mint, after logout, invokes that call's own source rather than an earlier one", async () => {
+  __resetRuntimes();
+  const noTimers = { setTimer: () => 0, clearTimer: () => {} };
+
+  const x = createRandomSource({
+    inject: () => {},
+    ...noTimers,
+    globalCrypto: { getRandomValues: (arr: Uint8Array) => arr.fill(1) },
+  });
+  let xCalls = 0;
+  const xBytes = (n: number) => {
+    xCalls++;
+    return x.bytes(n);
+  };
+
+  const rt = getRuntime(cfg('sequential'));
+  const idX = await rt.installId(xBytes);
+  assert.equal(xCalls, 1);
+  assert.equal(idX, toBase64Url(new Uint8Array(16).fill(1)));
+
+  await rt.logout(); // clears the install-id memo; a fresh mint is due next call
+
+  const y = createRandomSource({
+    inject: () => {},
+    ...noTimers,
+    globalCrypto: { getRandomValues: (arr: Uint8Array) => arr.fill(2) },
+  });
+  let yCalls = 0;
+  const yBytes = (n: number) => {
+    yCalls++;
+    return y.bytes(n);
+  };
+
+  const idY = await rt.installId(yBytes);
+  assert.equal(yCalls, 1, "Y's source must actually be invoked, not skipped for a memoised one");
+  assert.equal(
+    idY,
+    toBase64Url(new Uint8Array(16).fill(2)),
+    "Y's bytes must come back — a capture-once-per-entry mutant would return X's instead",
   );
 });
