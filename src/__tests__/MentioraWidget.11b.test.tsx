@@ -99,27 +99,21 @@ test('a handshake timeout never spends the network retry ladder', async () => {
   expect(codes).not.toContain('load_failed');
 });
 
-test('a valid initialize clears the watchdog synchronously — before the random-bytes round trip ever resolves', async () => {
-  // Node (and so Jest) has had WebCrypto as a global since v19, so the
-  // composition root's `globalCrypto` fast path resolves `randomSource.bytes()`
-  // in a microtask regardless of where `clearWatchdogTimer()` sits relative to
-  // that `await` — the distinction this test needs to make would be invisible.
-  // Disabling it (matching 11a's own "without host WebCrypto" test) forces the
-  // injected round trip, which this test deliberately never answers: it stays
-  // pending until ITS OWN unrelated 2s timeout REJECTS it. If the watchdog
-  // were cleared AFTER that await instead of before it — in a `.then`, after
-  // the round trip, or in an effect — the rejection would skip straight past
-  // that line, the mount-armed watchdog (8s) would still be live, and it
-  // would fire at 8s regardless of the 30s this test advances past that. The
-  // ONLY way `reload()` stays uncalled at 9s here is a clear that already
-  // happened synchronously, before the await, the moment the request was
-  // accepted.
-  //
-  // What DOES fire, at ~10s, is the watchdog the handler's own catch re-arms
-  // once that round trip rejects (branch review, C2) — a rejected handshake is
-  // an incident with an owner now, not a dead widget. The two are told apart
-  // by WHEN: the mount-armed watchdog would fire at 8s, the re-armed one at
-  // 2s (the round trip's own timeout) + 8s.
+// A rejected handshake's watchdog is the RE-ARMED one, and it is late
+// (branch review, C2). This test owns that timing and nothing else.
+//
+// It does NOT cover the synchronous `clearWatchdogTimer()`, and its previous
+// title said it did — re-review N2, this project's signature defect, caught
+// for the sixth time. Host WebCrypto is disabled here, so `bytes()` parks and
+// rejects at 2s; C2's catch then calls `armWatchdog()`, which clears the
+// mount-armed timer as a SIDE EFFECT. Delete the synchronous clear and this
+// test still passes, because the re-arm does its job for it. The sibling test
+// below, on a handshake that SUCCEEDS, is where the clear is actually
+// guarded — the two cannot live in one test, because one needs a rejecting
+// handshake and the other needs a successful one.
+test('a rejected handshake is reloaded by the RE-ARMED watchdog, not the mount-armed one', async () => {
+  // Told apart by WHEN: the mount-armed watchdog fires at 8s, the re-armed one
+  // at 2s (the round trip's own timeout) + 8s. Not before 9s, done by 11s.
   const realCrypto = globalThis.crypto;
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
   try {
@@ -132,6 +126,38 @@ test('a valid initialize clears the watchdog synchronously — before the random
   } finally {
     Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
   }
+});
+
+// Re-review, N2. The test above can no longer catch a missing
+// `clearWatchdogTimer()` and this one is why it is still covered. It disables
+// host WebCrypto, so its handshake REJECTS — and C2's catch calls
+// `armWatchdog()`, which clears the mount-armed timer as a side effect and
+// re-arms later. The rejection path therefore looks identical with and
+// without the synchronous clear. Only a handshake that SUCCEEDS separates
+// them: nothing else clears the watchdog on that path.
+//
+// 7.9s is the case the handler's own comment names. Under Jest,
+// `globalThis.crypto` exists, so the composition root passes it as
+// `globalCrypto` and `bytes()` resolves in a microtask — no round trip to
+// park, no rejection, nothing but the clear standing between a good handshake
+// and the 8s timer.
+//
+// Catches deleting `clearWatchdogTimer()` from the `initialize` handler:
+// without it the page is answered AND reloaded 100ms later, its brand-new
+// session key discarded.
+test('a handshake that succeeds at 7.9s is answered and NOT reloaded at 8s', async () => {
+  const onEvent = jest.fn();
+  const el = await mount(onEvent);
+  await advance(7900); // the mount-armed watchdog has 100ms left
+  await initialize(el);
+  await advance(300); // past 8000
+
+  // The handshake really landed — without this the test would also pass for a
+  // page whose `initialize` was rejected or never parsed, which is the
+  // ordinary watchdog case and proves nothing about the clear.
+  expect(sent().some((m) => 'result' in m)).toBe(true);
+  expect(__lastWebView().reload).not.toHaveBeenCalled();
+  expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
 test('a network-ladder reload that never re-initializes still gets caught by the watchdog', async () => {
