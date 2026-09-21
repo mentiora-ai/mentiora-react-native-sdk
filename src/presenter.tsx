@@ -170,11 +170,13 @@ function ModalBody({
   config: MentioraConfig;
   reloadKey: number;
 }): React.JSX.Element {
-  // Set once a session ever reaches the error surface or asks to close, and
-  // never cleared for the life of THIS mount (a fresh key/open cycle is a
-  // fresh instance, hence a fresh ref) — mirrors `onHardwareBack`'s own
-  // `dismissed || errorCode !== null` guard, which `onRequestClose` needs for
-  // the same reason (see the file header on 11c's watchdog give-up branch).
+  // Set once a session ever reaches the error surface, and never cleared for
+  // the life of THIS mount (a fresh key/open cycle is a fresh instance, hence
+  // a fresh ref) — mirrors `onHardwareBack`'s own `dismissed || errorCode !==
+  // null` guard, which `onRequestClose` needs for the same reason (see the
+  // file header on 11c's watchdog give-up branch). `{type:'close'}` doesn't
+  // need to set this itself: it unmounts `ModalBody` outright via
+  // `Mentiora.close()` below, which is a stronger guarantee than a ref.
   const blocked = useRef(false);
 
   useEffect(() => {
@@ -201,8 +203,8 @@ function ModalBody({
   // happened at all, so it could never release the hold: back was dead for
   // the life of the Modal, exactly the trap 11b/11c both exist to close).
   // `blocked` is checked first, same reasoning as `onHardwareBack`'s own
-  // `dismissed || errorCode !== null` guard: once the error surface is up (or
-  // the page asked to close), a late/stale hold must not keep forwarding.
+  // `dismissed || errorCode !== null` guard: once the error surface is up, a
+  // late/stale hold must not keep forwarding into whatever is now showing.
   const onRequestClose = useCallback((): void => {
     if (!blocked.current) {
       const sendBack = getBackHandler(config.embedKey);

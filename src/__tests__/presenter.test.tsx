@@ -28,12 +28,13 @@ beforeEach(() => {
   Mentiora.close();
 });
 
-// Fake timers for the WHOLE file, not toggled per test: `driveToHandshakeTimeout`
-// needs to advance past the widget's own mount-armed watchdog, and Jest's fake
-// timers only intercept a `setTimeout` call made AFTER `jest.useFakeTimers()`
-// runs — switching mid-test, after a widget has already mounted under real
-// timers, leaves that specific timer unreachable by `advanceTimersByTimeAsync`.
-// 11b's file makes the same file-wide choice for the same reason.
+// Fake timers for the WHOLE file, not toggled per test: `driveCrashLadderToExhaustion`
+// needs to advance past the widget's own mount-armed watchdog and recovery
+// timers, and Jest's fake timers only intercept a `setTimeout` call made
+// AFTER `jest.useFakeTimers()` runs — switching mid-test, after a widget has
+// already mounted under real timers, leaves that specific timer unreachable
+// by `advanceTimersByTimeAsync`. 11b's file makes the same file-wide choice
+// for the same reason.
 beforeEach(() => {
   jest.useFakeTimers();
 });
@@ -46,9 +47,8 @@ afterEach(() => {
 //
 // `handshake`/`backHandling` copy 11c's shape; `handshakeInstallId` extends
 // 11a's `sent()` pattern to pull `installId` out of the initialize reply;
-// `driveToHandshakeTimeout` copies 11b's `advance()` pattern, called twice
-// (one silent reload, one give-up) exactly like 11c's own "late handshake"
-// test.
+// `driveCrashLadderToExhaustion` copies 11b's `advance()` pattern and its own
+// "Retry recovers a dead renderer" test's loop shape.
 const BRIDGE_INJECTION = /^window\.mentioraHost\.receive\((.*)\);true;$/s;
 
 const sentFrom = (view: MockWebViewRef = __lastWebView()): Record<string, unknown>[] =>
@@ -117,13 +117,21 @@ const requestClose = (): void => {
   (modal.props.onRequestClose as () => void)();
 };
 
-const driveToHandshakeTimeout = async (): Promise<void> => {
-  await act(async () => {
-    await jest.advanceTimersByTimeAsync(8000);
-  });
-  await act(async () => {
-    await jest.advanceTimersByTimeAsync(8000);
-  });
+// Fix round 2: drives `CRASH_RETRY_POLICY.attempts` (4) `onRenderProcessGone`
+// failures to exhaustion, the same way 11b's own "Retry recovers a dead
+// renderer" test does — re-querying `mentiora-webview` by testID on every
+// iteration rather than caching the element, because `onRenderProcessGone`'s
+// recovery bumps `remountKey` and swaps the WebView instance out from under a
+// cached reference on every attempt but the last.
+const driveCrashLadderToExhaustion = async (): Promise<void> => {
+  for (let i = 0; i < 4; i++) {
+    await fireEvent(screen.getByTestId('mentiora-webview'), 'renderProcessGone', {
+      nativeEvent: { didCrash: true },
+    });
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(9000);
+    });
+  }
 };
 
 test('open presents a Modal and close dismisses it', async () => {
@@ -296,22 +304,54 @@ test('onRequestClose dismisses only once the page released the back button', asy
 });
 
 test('onRequestClose dismisses even while the page holds back, once the error surface is up', async () => {
-  // The same trap 11c closed for the hardware button, reached through the Modal.
-  // MentioraWidget.tsx:514-516 shows the watchdog's give-up branch calls showError
-  // WITHOUT advanceGeneration, so a late initialize can claim back after the surface.
+  // Fix round 2: the sequence that actually reaches the `blocked` guard, not
+  // the one originally written here (driving the HANDSHAKE watchdog, then a
+  // "late" handshake+backHandling(true) afterward) — that sequence never
+  // established a live session at all by the time `requestClose()` ran, so
+  // `getBackHandler` returned `undefined` regardless of the guard and the
+  // assertion passed identically with it mutated to `if (true)`.
+  //
+  // The real sequence: establish a session FIRST (the page must actually
+  // claim the button, which only a live session lets it do), THEN drive the
+  // CRASH ladder (not the handshake watchdog) to exhaustion.
+  // MentioraWidget.tsx keeps the WebView mounted under the error surface
+  // (`importantForAccessibility`, never an unmount) and `setBackHandler(...,
+  // null)` only ever runs on release or on the widget's own unmount — neither
+  // happens here — so the handler registered before the crash survives to be
+  // read by `onRequestClose` under the error surface.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
-  const el = screen.getByTestId('mentiora-webview');
-  await driveToHandshakeTimeout(); // both watchdog rungs
-  await handshake(el); // a late handshake under the surface
-  await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
+  await handshake(screen.getByTestId('mentiora-webview'));
+  await fireEvent(screen.getByTestId('mentiora-webview'), 'message', {
+    nativeEvent: { data: backHandling(true) },
+  });
+  await driveCrashLadderToExhaustion();
+  // Captured before `requestClose()`: dismissing unmounts the WebView, and
+  // `__lastWebView()` (which `sent()` calls) throws once none is mounted —
+  // this ref object itself, and its call history, are still good afterward.
+  const view = __lastWebView();
+  const sentBeforeClose = sentFrom(view).length;
   await act(async () => {
     requestClose();
   });
-  expect(screen.queryByTestId('mentiora-webview')).toBeNull();
+  // `includeHiddenElements` matters here specifically: the WebView is marked
+  // `importantForAccessibility="no-hide-descendants"` under the error surface,
+  // which RNTL's queries exclude BY DEFAULT — a plain `queryByTestId` would
+  // read as `null` (looks dismissed) even while still mounted, hiding exactly
+  // the bug this test exists to catch. Only WITH it does "properly dismissed
+  // and unmounted" read differently from "still mounted, merely hidden".
+  expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull(); // dismissed, not left inert (mounted-but-hidden, back button dead)
+  // Forwarding into a dead renderer is the actual bug here, not merely
+  // failing to dismiss — "it dismissed" alone would still pass if some
+  // future change dismissed AND forwarded.
+  expect(
+    sentFrom(view)
+      .slice(sentBeforeClose)
+      .some((message) => message.method === 'mentiora/back'),
+  ).toBe(false);
 });
 
 test('the presenter unsubscribes from runtime.onReload when the Modal closes', async () => {
