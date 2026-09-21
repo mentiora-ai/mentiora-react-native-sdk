@@ -1,0 +1,39 @@
+// src/__tests__/ErrorScreen.test.tsx
+import { fireEvent, render, screen } from '@testing-library/react-native';
+import { ErrorScreen } from '../ui/ErrorScreen';
+import { DEFAULT_STRINGS } from '../ui/strings';
+
+test('renders a retry and a dismiss, both reachable to a screen reader', async () => {
+  const onRetry = jest.fn(),
+    onDismiss = jest.fn();
+  await render(<ErrorScreen code="load_failed" onRetry={onRetry} onDismiss={onDismiss} />);
+  const retry = screen.getByRole('button', { name: DEFAULT_STRINGS.retry });
+  const dismiss = screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss });
+  await fireEvent.press(retry);
+  await fireEvent.press(dismiss);
+  expect(onRetry).toHaveBeenCalledTimes(1);
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+});
+
+test('a partial strings override replaces only what it names', async () => {
+  await render(
+    <ErrorScreen
+      code="load_failed"
+      onRetry={jest.fn()}
+      onDismiss={jest.fn()}
+      strings={{ retry: 'Nochmal' }}
+    />,
+  );
+  expect(screen.getByText('Nochmal')).toBeTruthy();
+  expect(screen.getByText(DEFAULT_STRINGS.dismiss)).toBeTruthy();
+});
+
+test('every code renders the same sentence — the code is for onEvent, not for the user', async () => {
+  for (const code of ['load_failed', 'handshake_timeout', 'renderer_crashed'] as const) {
+    const view = await render(
+      <ErrorScreen code={code} onRetry={jest.fn()} onDismiss={jest.fn()} />,
+    );
+    expect(screen.getByText(DEFAULT_STRINGS.errorBody)).toBeTruthy();
+    await view.unmount();
+  }
+});

@@ -15,11 +15,19 @@ export interface MentioraIdentityFetcher {
 
 export type MentioraIdentity = MentioraIdentityCallback | MentioraIdentityFetcher;
 
+/**
+ * Distinguishes a dead network from a page that loaded and never spoke.
+ * Never shown to the user — the error screen renders the same sentence for
+ * all three; the code is read by the host app through `onEvent`.
+ */
+export type MentioraErrorCode = 'load_failed' | 'handshake_timeout' | 'renderer_crashed';
+
 export type MentioraEvent =
   | { type: 'ready' }
   | { type: 'close' }
   | { type: 'identityError'; reason: string }
-  | { type: 'openUrl'; url: string };
+  | { type: 'openUrl'; url: string }
+  | { type: 'error'; code: MentioraErrorCode };
 
 /** Overrides the AsyncStorage default used to persist the install id. */
 export interface MentioraStorage {
