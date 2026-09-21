@@ -14,7 +14,7 @@ import {
 } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
 import { RANDOM_REPLY_TAG } from '../random';
-import { __resetRuntimes } from '../runtime';
+import { __resetRuntimes, getRuntime } from '../runtime';
 import { SDK_NAME, SDK_VERSION } from '../version';
 
 const ORIGIN = 'https://w.x.ai';
@@ -402,4 +402,79 @@ test('two widgets on one embed key share a runtime and mint ONE install id', asy
     .map((m) => (m as { result: { installId: string } }).result.installId);
   expect(ids).toHaveLength(2);
   expect(new Set(ids).size).toBe(1);
+});
+
+// Branch review, M2. design.md §2.4 asks for both halves — "a loud `__DEV__`
+// warning that every launch creates a new anonymous user AND an `onEvent` so
+// the degraded state is visible in a release build" — and `resolveStorage`
+// has always computed the flag while nothing read it. The composition root is
+// the caller `storage.ts`'s own header names, so this is where the wiring
+// lives and where it has to be asserted.
+//
+// The degraded runtime is built by hand rather than by unmocking the
+// AsyncStorage peer: `jest.setup.ts` mocks that module for the whole suite,
+// and `resolveStorage`'s own branches already have core tests. What has no
+// coverage at all is whether anybody READS the flag, which is exactly what
+// mutating the memoised runtime exercises.
+// Returns the `console.warn` spy as well, both because §2.4 asks for the
+// warning by name and because the real one would otherwise print on every one
+// of these tests.
+const degradeStorage = (reason: 'peer-absent' | 'no-require' = 'peer-absent') => {
+  const rt = getRuntime({ widgetOrigin: ORIGIN, embedKey: KEY });
+  rt.storage = { ephemeral: true, reason, detail: 'no peer here' };
+  return jest.spyOn(console, 'warn').mockImplementation(() => {});
+};
+
+test('degraded storage is reported through onEvent, not only to a stripped __DEV__ warning', async () => {
+  const warn = degradeStorage();
+  const onEvent = jest.fn();
+  try {
+    await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+    expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'peer-absent' });
+    // The warning too: §2.4 asks for both, and the event alone leaves a dev
+    // with no console trace of why their threads keep vanishing.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('peer-absent'));
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('the reason travels with the event — the three fallbacks need different fixes', async () => {
+  // 'peer-absent' says "install the peer"; 'no-require' says "this build
+  // cannot auto-resolve one at all, pass `storage`". A hard-coded reason would
+  // pass the test above and send every customer down the wrong road.
+  const warn = degradeStorage('no-require');
+  const onEvent = jest.fn();
+  try {
+    await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+    expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'no-require' });
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('working storage says nothing at all', async () => {
+  const onEvent = jest.fn();
+  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+  expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'storageUnavailable' }));
+});
+
+test('one degraded store is reported once per embed key, not once per presentation', async () => {
+  // The Modal mounts a fresh `<MentioraWidget />` on every `Mentiora.open()`
+  // (§2.7), so an emit tied to mount would fire on every open for a fact that
+  // has not changed.
+  const warn = degradeStorage();
+  const onEvent = jest.fn();
+  try {
+    const first = await render(
+      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />,
+    );
+    await first.unmount();
+    await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+    expect(
+      onEvent.mock.calls.filter(([e]) => (e as { type: string }).type === 'storageUnavailable'),
+    ).toHaveLength(1);
+  } finally {
+    warn.mockRestore();
+  }
 });

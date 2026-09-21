@@ -26,12 +26,35 @@ export type MentioraIdentity = MentioraIdentityCallback | MentioraIdentityFetche
  */
 export type MentioraErrorCode = 'load_failed' | 'handshake_timeout' | 'renderer_crashed';
 
+/**
+ * Why `resolveStorage` picked the store it did. `override` and `peer-loaded`
+ * persist; the other three are the in-memory fallback, and each names a
+ * different fix: install the optional AsyncStorage peer (`peer-absent`), pass
+ * `storage` explicitly because this build cannot auto-resolve a peer at all
+ * (`no-require`), or look at the store you passed (`load-threw`).
+ */
+export type StorageReason =
+  | 'override'
+  | 'peer-loaded'
+  | 'peer-absent'
+  | 'no-require'
+  | 'load-threw';
+
 export type MentioraEvent =
   | { type: 'ready' }
   | { type: 'close' }
   | { type: 'identityError'; reason: string }
   | { type: 'openUrl'; url: string }
-  | { type: 'error'; code: MentioraErrorCode };
+  | { type: 'error'; code: MentioraErrorCode }
+  /**
+   * design.md §2.4: no AsyncStorage and no `storage` override means the
+   * install id lives in memory, so every launch creates a new anonymous user
+   * with no thread continuity. The `__DEV__` warning that goes out alongside
+   * this is stripped from release bundles, where the failure otherwise shows
+   * up only as inflated anonymous user counts — hence an event too. Emitted
+   * once per embed key, not once per presentation.
+   */
+  | { type: 'storageUnavailable'; reason: StorageReason };
 
 /** Overrides the AsyncStorage default used to persist the install id. */
 export interface MentioraStorage {

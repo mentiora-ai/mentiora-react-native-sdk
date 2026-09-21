@@ -22,16 +22,13 @@
  * from "this build cannot auto-resolve storage at all — pass `storage`
  * explicitly on `MentioraConfig`".
  */
-import type { MentioraStorage } from './types.js';
+import type { MentioraStorage, StorageReason } from './types.js';
 
-export type { MentioraStorage };
-
-export type StorageReason =
-  | 'override'
-  | 'peer-loaded'
-  | 'peer-absent'
-  | 'no-require'
-  | 'load-threw';
+// `StorageReason` is declared in `types.ts` rather than here because it rides
+// on the public `MentioraEvent` union (§2.4's `storageUnavailable`); this
+// re-export keeps every internal caller importing it from the module that
+// produces it.
+export type { MentioraStorage, StorageReason };
 
 export type ResolvedStorage = {
   storage: MentioraStorage;

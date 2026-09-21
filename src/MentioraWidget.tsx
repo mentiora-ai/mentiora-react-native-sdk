@@ -281,6 +281,13 @@ const CRASH_RETRY_POLICY: RetryPolicy = {
 const HANDSHAKE_WATCHDOG_MS = 8000;
 const HANDSHAKE_RECOVERY_CAP = 1;
 
+/** Which runtimes have already reported degraded storage (§2.4). Keyed on the
+ *  runtime object, which `getRuntime` memoises per embed key and never
+ *  rebuilds, so this is "once per embed key" without a registry to clear — a
+ *  `__resetRuntimes()` produces fresh objects and the old entries fall out of
+ *  the WeakSet with them. */
+const warnedRuntimes = new WeakSet<MentioraRuntime>();
+
 /** Embed the widget inline. Renders no chrome: the page draws its own header. */
 export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   const webview = useRef<Embedded | null>(null);
@@ -505,6 +512,32 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // render, a dependency and resubscribe the reload listener on every render.
   useEffect(() => {
     return runtime.onReload(() => restart.current());
+  }, [runtime]);
+
+  // design.md §2.4, the half nothing implemented (branch review, M2):
+  // `resolveStorage` has always computed `ephemeral`/`reason` and the runtime
+  // has always carried them, but no caller read either, so the SDK fell back
+  // to in-memory storage in silence. Without persistence every launch mints a
+  // new anonymous user and no thread survives, which is a support ticket
+  // ("customers keep losing their history") with no signal attached.
+  //
+  // Both halves, because `__DEV__` is stripped from release bundles: a warning
+  // alone makes this invisible exactly where it costs money, so the event is
+  // what a release build can see. Once per runtime — i.e. per embed key —
+  // since the Modal mounts a fresh widget on every `open()` and one degraded
+  // store is one fact, not one per presentation.
+  useEffect(() => {
+    if (!runtime.storage.ephemeral || warnedRuntimes.has(runtime)) return;
+    warnedRuntimes.add(runtime);
+    const { reason, detail } = runtime.storage;
+    if (__DEV__)
+      console.warn(
+        `mentiora: no persistent storage (${reason}${detail ? `: ${detail}` : ''}). ` +
+          'The install id is held in memory, so every launch creates a new anonymous ' +
+          'user with no thread continuity. Install ' +
+          '@react-native-async-storage/async-storage, or pass `storage` on the config.',
+      );
+    latest.current.props.onEvent?.({ type: 'storageUnavailable', reason });
   }, [runtime]);
   /** Assigned during render, further down, right after `restartLoad` is
    *  defined — the effect above runs after commit, so it always calls a real
