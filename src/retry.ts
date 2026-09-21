@@ -28,12 +28,12 @@ export const retry = async <T>(
   const delays = delaysFor(policy, random);
   let lastError: Error | undefined;
 
-  for (let attempt = 0; attempt < policy.attempts; attempt++) {
+  for (let attempt = 1; attempt <= policy.attempts; attempt++) {
     try {
       return await fn(attempt);
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
-      const delay = delays[attempt];
+      const delay = delays[attempt - 1];
       if (delay !== undefined) {
         await sleep(delay);
       }
