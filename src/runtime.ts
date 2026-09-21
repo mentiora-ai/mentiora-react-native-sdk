@@ -126,7 +126,14 @@ const buildEntry = (
  *  the `wasSignedIn` flag from storage, and swapping identity source is not
  *  a logout: doing so would let the very next boot demote a signed-in
  *  install to a fresh anonymous one. Discarding the object is enough; its
- *  cached token dies with it. */
+ *  cached token dies with it.
+ *
+ *  `identity` is the ONLY field reconciled. A repeat call passing a different
+ *  `config.storage` is ignored on purpose: storage is per-embed-key ownership
+ *  (design.md:262-269), swapping it mid-life would strand the install id the
+ *  runtime already minted into the old store, and no caller has a reason to.
+ *  `MentioraRuntime.storage` is therefore a build-time snapshot and stays
+ *  accurate only while that holds — relax this and it goes stale. */
 export const getRuntime = (
   config: MentioraConfig,
   randomBytes: (n: number) => Promise<Uint8Array>,
