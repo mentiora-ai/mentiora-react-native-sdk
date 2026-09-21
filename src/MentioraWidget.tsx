@@ -515,6 +515,17 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *  `armWatchdog`'s own doc for why a network/crash reload must not. */
   const advanceGeneration = (): void => {
     peer.resetLoad();
+    // A back-button hold belongs to the DOCUMENT that claimed it, and this is
+    // the point where that document stops existing. `peer.resetLoad()` alone
+    // only covers the window between here and the replacement page's own
+    // `initialize`: the moment that handshake lands, `peer.sessionKey()` is
+    // non-null again and a `backHeld` left over from the previous document
+    // would be trusted for the rest of the widget's life — every press
+    // claimed and forwarded to a page that never asked for the button, with
+    // the Modal unable to close and no visible reason why (branch review,
+    // C1). The page re-claims it with a fresh `mentiora/backHandling` if it
+    // still wants it.
+    backHeld.current = false;
     generation.current += 1;
     handled.current = false;
     clearRecoveryTimer();

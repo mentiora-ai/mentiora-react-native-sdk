@@ -79,6 +79,15 @@ const currentSessionKey = (): string => {
   return key;
 };
 
+// Proof that the assertion below is testing what it claims: a `pressBack()`
+// of `false` is also what a page with NO session key gives, so the stale-hold
+// test has to show the replacement page's handshake actually landed. Every
+// send once a session exists carries the key, so its presence is the proof.
+const peerHasSession = (): boolean => {
+  const last = sent().at(-1) as { params?: { sessionKey?: string } } | undefined;
+  return typeof last?.params?.sessionKey === 'string';
+};
+
 const backHandling = (active: boolean): string =>
   JSON.stringify({
     jsonrpc: '2.0',
@@ -181,6 +190,18 @@ test("once the ladder's own reload resets the session key, a stale hold no longe
     await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
     // The load ladder's first retry delay (~1s, cap 8s) — comfortably past it.
     await act(async () => jest.advanceTimersByTimeAsync(2000));
+    expect(pressBack()).toBe(false);
+    // ...and it must STAY ours once the replacement page handshakes (branch
+    // review, C1). The check above only proves the window BETWEEN the reset
+    // and the next `initialize`: `peer.sessionKey() !== null` is true again
+    // the instant the new document completes its handshake, so a `backHeld`
+    // that survived the load boundary would be trusted from here on, for a
+    // page that sent no `backHandling` at all — every press claimed and
+    // forwarded, the Modal never closing. This second handshake is the whole
+    // difference; it fails if `backHeld.current = false` is deleted from
+    // `advanceGeneration()`.
+    await handshake(el);
+    expect(peerHasSession()).toBe(true); // the new page really did handshake
     expect(pressBack()).toBe(false);
   } finally {
     jest.useRealTimers();
