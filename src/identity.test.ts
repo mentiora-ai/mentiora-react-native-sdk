@@ -233,3 +233,22 @@ test('warns in dev when exp - iat exceeds 3600s, because the mint will reject it
   await p.initial();
   assert.equal(warnings.length, 1);
 });
+
+test('a failed wasSignedIn flag write does not fail an otherwise-successful boot', async () => {
+  const storage: MentioraStorage = {
+    getItem: async () => null,
+    setItem: async () => {
+      throw new Error('disk full');
+    },
+    removeItem: async () => {},
+  };
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage,
+    identity: { getToken: () => jwt(2000000000) },
+  });
+  assert.ok(
+    await p.initial(),
+    'the caller already has a token; a flag-write failure is not its problem',
+  );
+});
