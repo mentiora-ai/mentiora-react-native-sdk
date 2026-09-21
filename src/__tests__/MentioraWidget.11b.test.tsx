@@ -13,7 +13,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { __lastWebView, __resetWebViews } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
-import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
 
@@ -38,11 +37,6 @@ afterEach(() => {
 // noise without touching which timer API is used (still
 // `advanceTimersByTimeAsync`, never the synchronous `advanceTimersByTime`).
 const advance = (ms: number) => act(async () => jest.advanceTimersByTimeAsync(ms));
-
-const answerRandom = (el: ReturnType<typeof screen.getByTestId>, count = 16) =>
-  fireEvent(el, 'message', {
-    nativeEvent: { data: JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(count).fill(7) }) },
-  });
 
 const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion = 1) =>
   fireEvent(el, 'message', {
@@ -88,15 +82,62 @@ test('a handshake timeout never spends the network retry ladder', async () => {
   await mount(onEvent);
   await advance(20000);
   const codes = onEvent.mock.calls.map(([e]) => (e as { code?: string }).code);
+  // The negative alone ("never load_failed") is the "both paths sent
+  // nothing" shape — an implementation that emits no events at all would
+  // pass it too. Assert the positive as well: the watchdog itself DID fire
+  // and give up (two 8s cycles fit inside 20s), so its own code is present.
+  expect(codes).toContain('handshake_timeout');
   expect(codes).not.toContain('load_failed');
 });
 
-test('a valid initialize clears the watchdog synchronously', async () => {
-  const el = await mount();
-  await initialize(el);
-  await answerRandom(el);
-  await advance(30000);
-  expect(__lastWebView().reload).not.toHaveBeenCalled();
+test('a valid initialize clears the watchdog synchronously — before the random-bytes round trip ever resolves', async () => {
+  // Node (and so Jest) has had WebCrypto as a global since v19, so the
+  // composition root's `globalCrypto` fast path resolves `randomSource.bytes()`
+  // in a microtask regardless of where `clearWatchdogTimer()` sits relative to
+  // that `await` — the distinction this test needs to make would be invisible.
+  // Disabling it (matching 11a's own "without host WebCrypto" test) forces the
+  // injected round trip, which this test deliberately never answers: it stays
+  // pending until ITS OWN unrelated 2s timeout REJECTS it. If the watchdog
+  // were cleared AFTER that await instead of before it — in a `.then`, after
+  // the round trip, or in an effect — the rejection would skip straight past
+  // that line, the mount-armed watchdog (8s) would still be live, and it
+  // would fire at 8s regardless of the 30s this test advances past that. The
+  // ONLY way `reload()` stays uncalled here is a clear that already happened
+  // synchronously, before the await, the moment the request was accepted.
+  const realCrypto = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
+  try {
+    const el = await mount();
+    await initialize(el);
+    await advance(30000);
+    expect(__lastWebView().reload).not.toHaveBeenCalled();
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
+  }
+});
+
+test('a network-ladder reload that never re-initializes still gets caught by the watchdog', async () => {
+  // The critical case: a transient blip triggers the network ladder, its own
+  // reload succeeds at the HTTP level, but the page's JS never calls
+  // `initialize` again. Without a watchdog re-armed for the NEW generation,
+  // nothing would ever fire — no error surface, no `onEvent`, and because
+  // the page draws its own chrome, no Dismiss either. The fix is `onLoadEnd`
+  // re-arming the watchdog once that reload's document actually finishes
+  // loading (never a network/crash reload's own `reload()`/remount call,
+  // which on Android runs no navigation callback at all).
+  const onEvent = jest.fn();
+  const el = await mount(onEvent);
+  await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
+  await advance(2000); // the ladder's own reload fires well inside this (cap 8s, first delay ~1s)
+  expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
+  // The reload's own document finishes loading — successfully, at the HTTP
+  // level — but its JS never speaks again.
+  await fireEvent(screen.getByTestId('mentiora-webview'), 'loadEnd', { nativeEvent: {} });
+  await advance(8000);
+  // The watchdog's OWN single self-heal: one more silent reload.
+  expect(__lastWebView().reload).toHaveBeenCalledTimes(2);
+  await advance(8000);
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
 test('onRenderProcessGone remounts up to 3 times then gives up', async () => {
@@ -125,13 +166,29 @@ test('onContentProcessDidTerminate shares the crash cap with onRenderProcessGone
 
 test('ONE incident raising two callbacks advances ONE counter', async () => {
   const onEvent = jest.fn();
-  const el = await mount(onEvent);
-  await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
-  await fireEvent(el, 'renderProcessGone', { nativeEvent: { didCrash: true } });
-  await advance(9000);
-  // Only the first terminal callback for a generation picks a path. Two more
-  // genuine incidents must still be needed before any surface appears.
+  await mount(onEvent);
+  await fireEvent(screen.getByTestId('mentiora-webview'), 'error', {
+    nativeEvent: { description: 'net' },
+  });
+  await fireEvent(screen.getByTestId('mentiora-webview'), 'renderProcessGone', {
+    nativeEvent: { didCrash: true },
+  });
+  await advance(9000); // lets the network ladder's own recovery fire and move on
+  // Only the first terminal callback for a generation picks a path, so the
+  // crash counter above must still read 0, not 1 — it needs its own full
+  // cap (3 more recoveries, 4 total) before any surface appears, not one
+  // fewer. A mutant that deletes the `handled` gate double-counts that first
+  // incident (both callbacks run), so its crash counter starts at 1 instead
+  // of 0 and is already AT its cap of 4 after these same 3 further, genuine
+  // crash-only incidents — which is exactly why 3 is driven here, not fewer.
+  for (let i = 0; i < 3; i++) {
+    await fireEvent(screen.getByTestId('mentiora-webview'), 'renderProcessGone', {
+      nativeEvent: { didCrash: true },
+    });
+    await advance(9000);
+  }
   expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
+  expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'renderer_crashed' });
 });
 
 test('Retry clears the surface and reloads; Dismiss emits close without reloading', async () => {

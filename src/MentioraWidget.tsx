@@ -43,26 +43,40 @@
  *   callback for a generation (network error, crash, or watchdog timeout —
  *   whichever fires first) picks a recovery path and advances a counter;
  *   every other one for that generation, of any kind, is ignored.
- * - The watchdog is armed only on a fresh top-level load boundary — mount, an
- *   allowed top-frame navigation, or its own single self-triggered reload —
- *   never by a network- or crash-ladder reload. Those already know the load
- *   failed; re-arming the watchdog on their reload would let it race their
- *   own recovery and misreport `handshake_timeout` for an incident that was
- *   already being handled (confirmed by working the exact numbers: the
- *   watchdog's 8s is shorter than the 9s a test needs to observe a ladder's
- *   jittered reload, so a rearmed watchdog fires inside that same window on
- *   every single recovery — it would never converge). A network/crash reload
- *   still clears the CURRENT watchdog (it's for the load that just ended).
+ * - **The watchdog is (re-)armed from `onLoadEnd`**, not from a network- or
+ *   crash-ladder reload. `onLoadEnd` fires once a document has actually
+ *   finished loading — successfully or not — which is what §2.9's 8s is
+ *   really about: a document that has committed now has 8s to speak. Mount
+ *   still arms it directly too, as a floor for the very first load. Arming
+ *   from a ladder's own `reload()`/remount call instead would be a mock
+ *   artifact of a different kind than it looks: the mock's `reload()` is a
+ *   bare `jest.fn()` that fires no navigation callback at all, but even on
+ *   a real device neither platform's own reload-triggered navigation
+ *   callback is a substitute — iOS's `decidePolicyForNavigationAction` does
+ *   run for a `reload()`, so `onShouldStartLoadWithRequest` would eventually
+ *   re-arm it there, but Android's `shouldOverrideUrlLoading` is documented
+ *   to NOT run for `WebView.reload()`, so on Android a network/crash-ladder
+ *   reload that succeeds at the HTTP level but whose page never calls
+ *   `initialize` again would arm nothing, show nothing, and leave no exit —
+ *   exactly the trap this screen exists to prevent, reached through the
+ *   recovery path that is supposed to prevent it. `onLoadEnd` has no such
+ *   platform gap. The one exception is the watchdog's OWN self-triggered
+ *   reload, which still re-arms itself immediately (`beginFreshLoad`) rather
+ *   than waiting on `onLoadEnd` — its contract is "one silent reload, then
+ *   an unconditional recheck in 8s", not "whenever this reload happens to
+ *   finish".
  * - A valid `initialize` clears the watchdog SYNCHRONOUSLY (the first line of
  *   the `initialize` handler below, before any `await`) — not in an effect,
  *   not after the round trip for the session-key bytes completes.
  *
  * Dismiss does not depend on any of this: it is plain component state, so it
  * still works when the peer, the runtime, or every ladder above has already
- * given up.
+ * given up. Unmounted state is cleaned up in a `useEffect` — this is the one
+ * piece of 11b that has to be an effect, since there is no synchronous "the
+ * component is being torn down" hook to hang it on instead.
  */
 import type React from 'react';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
@@ -115,6 +129,7 @@ type OpenWindowEvent = Parameters<NonNullable<WebViewProps['onOpenWindow']>>[0];
 type ErrorEvent = Parameters<NonNullable<WebViewProps['onError']>>[0];
 type TerminatedEvent = Parameters<NonNullable<WebViewProps['onContentProcessDidTerminate']>>[0];
 type RenderProcessGoneEvent = Parameters<NonNullable<WebViewProps['onRenderProcessGone']>>[0];
+type LoadEndEvent = Parameters<NonNullable<WebViewProps['onLoadEnd']>>[0];
 
 /** design.md §2.9: load failure — 3 attempts (an immediate first try, then
  *  ~1s and ~2s with full jitter), cap 8s, then the error surface. Reused
@@ -341,17 +356,18 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     clearWatchdogTimer();
   };
 
-  /** Arms the handshake watchdog for the CURRENT generation. Called only from
-   *  a fresh top-level load boundary: mount, an allowed top-frame navigation,
-   *  or the watchdog's own single self-triggered reload — never from the
-   *  network or crash ladder's reload. Those already know their load failed;
-   *  giving them a rearmed watchdog too would let it race their own recovery
-   *  action (the watchdog's fixed 8s is shorter than the ~9s a test needs to
-   *  observe a jittered reload, so a rearmed watchdog fires inside that same
-   *  window on every single recovery and misreports `handshake_timeout` for
-   *  an incident a different ladder is already handling). A network/crash
+  /** Arms the handshake watchdog for the CURRENT generation: 8s for the page
+   *  to call `initialize`, starting now. Called from mount (a floor for the
+   *  very first load), from an allowed top-frame navigation, from
+   *  `onLoadEnd` (the real, platform-uniform re-arm point — see the header
+   *  comment for why a network/crash reload's own `reload()`/remount call
+   *  must NOT arm this directly), and from the watchdog's own single
+   *  self-triggered reload (which re-arms itself immediately rather than
+   *  waiting on that reload's own `onLoadEnd`, because its contract is "one
+   *  silent reload, then an unconditional recheck in 8s"). A network/crash
    *  reload still goes through `advanceGeneration`, so the watchdog that was
-   *  ticking for the load that just failed is cancelled — just not replaced. */
+   *  ticking for the load that just failed is cancelled — just not replaced
+   *  until that reload's `onLoadEnd` arrives. */
   const armWatchdog = (): void => {
     clearWatchdogTimer();
     const gen = generation.current;
@@ -400,6 +416,32 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     armWatchdog();
   }
 
+  // Without this, an unmounted widget's mount-armed watchdog is still live:
+  // `beginFreshLoad` fires `peer.resetLoad()` on a peer nobody reads from
+  // any more, and the eventual `showError` calls `onEvent` on a widget the
+  // host already closed. Empty deps: this is a teardown-only effect, not a
+  // sync-with-props one, and it is the one piece of 11b that has to be an
+  // effect — there is no synchronous "about to unmount" hook to use instead.
+  // Clears the refs directly (not via `clearWatchdogTimer`/`clearRecoveryTimer`,
+  // which are plain functions rebuilt every render and so would either force
+  // this effect to rerun on every render or fail exhaustive-deps) — `useRef`
+  // objects are themselves stable, so reading `.current` here needs no
+  // dependency at all.
+  useEffect(() => {
+    return () => {
+      if (watchdogTimer.current !== null) clearTimeout(watchdogTimer.current);
+      if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
+    };
+  }, []);
+
+  /** design.md §2.9: the real, platform-uniform re-arm point — a document
+   *  that has finished loading, successfully or not, has 8s to speak. See
+   *  the file header for why a ladder's own reload must not arm this
+   *  directly instead. */
+  const onLoadEnd = (_event: LoadEndEvent): void => {
+    armWatchdog();
+  };
+
   /** design.md §2.9: suppress the library's own error view and run the load
    *  ladder instead — 3 attempts total (this one plus up to 2 more), ~1s then
    *  ~2s with full jitter, then the error surface. */
@@ -442,14 +484,17 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
 
   /** A fresh, user-requested attempt: clear the surface, give every ladder a
    *  clean slate, treat it exactly like a new top-level load, and actually
-   *  make the still-mounted WebView try again — the overlay coming down does
-   *  not itself do that. */
+   *  make it try again. Always a remount (the `key` bump), never a bare
+   *  `reload()`: `renderer_crashed` can be what's showing, and `reload()` on
+   *  a renderer Android already killed is not a repair, it's the same dead
+   *  instance asked to do the one thing Android's own docs say it cannot —
+   *  a remount is correct for every code, not just that one. */
   const onRetry = (): void => {
     networkFailures.current = 0;
     crashFailures.current = 0;
     handshakeTimeouts.current = 0;
     beginFreshLoad();
-    webview.current?.reload();
+    setRemountKey((k) => k + 1);
     setErrorCode(null);
   };
 
@@ -461,7 +506,15 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
    *  in-flight timer does afterwards. */
   const onDismiss = (): void => {
     setDismissed(true);
-    latest.current.props.onEvent?.({ type: 'close' });
+    // The one `onEvent` call that must not be able to take the exit down
+    // with it: `setDismissed` above has already committed to stop rendering
+    // the WebView regardless of what the host's own callback does next.
+    try {
+      latest.current.props.onEvent?.({ type: 'close' });
+    } catch {
+      // Nothing to do with a throwing host callback here — Dismiss has
+      // already done its one job.
+    }
   };
 
   const onMessage = useCallback(
@@ -536,6 +589,13 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         onError={onError}
         onContentProcessDidTerminate={onContentProcessDidTerminate}
         onRenderProcessGone={onRenderProcessGone}
+        onLoadEnd={onLoadEnd}
+        // The overlay below covers this WebView but does not remove it from
+        // the tree (see its own comment), so without this a screen reader
+        // can still reach the dead page underneath the one screen that is
+        // supposed to be the only way out. Android: hide the whole subtree
+        // from TalkBack while the overlay owns the screen.
+        importantForAccessibility={errorCode !== null ? 'no-hide-descendants' : 'auto'}
       />
       {/* An overlay, not a swap: the WebView stays mounted underneath (its
        *  `injectJavaScript`/`reload` stay live for whichever ladder is still
@@ -543,7 +603,10 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
        *  what makes the page try again — this screen is just what covers a
        *  page that, on its own, never draws anything at all (§2.9). */}
       {errorCode !== null && (
-        <View style={StyleSheet.absoluteFill}>
+        // iOS: tells VoiceOver everything outside this view is not part of
+        // the current screen, matching Android's `importantForAccessibility`
+        // above on the WebView it is covering.
+        <View style={StyleSheet.absoluteFill} accessibilityViewIsModal={true}>
           <ErrorScreen code={errorCode} onRetry={onRetry} onDismiss={onDismiss} />
         </View>
       )}
