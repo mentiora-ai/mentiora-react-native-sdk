@@ -61,3 +61,46 @@ test('toBase64Url emits no +, / or = padding', () => {
   const s = toBase64Url(new Uint8Array([251, 255, 254, 0]));
   assert.ok(!/[+/=]/.test(s));
 });
+
+// --- Fix round 1 ---
+
+test('a reply with the wrong number of bytes rejects instead of resolving short', async () => {
+  const src = createRandomSource({ inject: () => {} });
+  const p = src.bytes(16);
+  const taken = src.acceptReply(JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(3).fill(3) }));
+  assert.equal(taken, true);
+  await assert.rejects(p, /malformed/);
+});
+
+test('a reply with an out-of-range byte value rejects', async () => {
+  const src = createRandomSource({ inject: () => {} });
+  const p = src.bytes(4);
+  const taken = src.acceptReply(JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: [1, 2, 300, -5] }));
+  assert.equal(taken, true);
+  await assert.rejects(p, /malformed/);
+});
+
+test('a second bytes() call while one is pending rejects, and the first still resolves', async () => {
+  const src = createRandomSource({ inject: () => {} });
+  const first = src.bytes(16);
+  await assert.rejects(src.bytes(16), /already in flight/);
+  const taken = src.acceptReply(
+    JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(5) }),
+  );
+  assert.equal(taken, true);
+  const b = await first;
+  assert.equal(b.length, 16);
+  assert.equal(b[0], 5);
+});
+
+test('a throwing globalCrypto rejects instead of throwing synchronously', async () => {
+  const src = createRandomSource({
+    inject: () => {},
+    globalCrypto: {
+      getRandomValues: () => {
+        throw new Error('broken polyfill');
+      },
+    },
+  });
+  await assert.rejects(src.bytes(16), /broken polyfill/);
+});

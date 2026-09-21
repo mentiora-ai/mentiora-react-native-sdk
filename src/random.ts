@@ -51,13 +51,18 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     resolve: (b: Uint8Array) => void;
     reject: (e: Error) => void;
     timer: unknown;
+    count: number;
   } | null = null;
 
   const bytes = (count: number): Promise<Uint8Array> => {
     if (globalCrypto?.getRandomValues) {
-      const a = new Uint8Array(count);
-      globalCrypto.getRandomValues(a);
-      return Promise.resolve(a);
+      try {
+        const a = new Uint8Array(count);
+        globalCrypto.getRandomValues(a);
+        return Promise.resolve(a);
+      } catch (e) {
+        return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+      }
     }
 
     if (pending) {
@@ -69,7 +74,7 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
         pending = null;
         reject(new Error('random bytes request timed out'));
       }, timeoutMs);
-      pending = { resolve, reject, timer };
+      pending = { resolve, reject, timer, count };
 
       const script = `(function(){try{
   var n = ${JSON.stringify(count)};
@@ -77,7 +82,7 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
   crypto.getRandomValues(a);
   window.ReactNativeWebView.postMessage(JSON.stringify({tag:${JSON.stringify(RANDOM_REPLY_TAG)},bytes:Array.from(a)}));
 }catch(e){
-  window.ReactNativeWebView.postMessage(JSON.stringify({tag:${JSON.stringify(RANDOM_REPLY_TAG)},error:String(e&&e.message)}));
+  window.ReactNativeWebView.postMessage(JSON.stringify({tag:${JSON.stringify(RANDOM_REPLY_TAG)},error:String((e&&e.message)||e)}));
 }})();true;`;
       deps.inject(script);
     });
@@ -105,7 +110,14 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
       return true;
     }
 
-    if (!Array.isArray(obj.bytes) || !obj.bytes.every((n) => typeof n === 'number')) {
+    const isByte = (n: unknown): n is number =>
+      typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 255;
+
+    if (
+      !Array.isArray(obj.bytes) ||
+      obj.bytes.length !== current.count ||
+      !obj.bytes.every(isByte)
+    ) {
       current.reject(new Error('random bytes reply malformed'));
       return true;
     }
