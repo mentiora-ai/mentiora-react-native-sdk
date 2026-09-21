@@ -1,3 +1,7 @@
+import type { MentioraStrings } from './ui/strings.js';
+
+export type { MentioraStrings };
+
 /** Resolve an identity token yourself. Called at boot and on every refresh. */
 export interface MentioraIdentityCallback {
   getToken: () => string | Promise<string>;
@@ -47,6 +51,10 @@ export interface MentioraConfig {
   /** Return true to take over. Default opens https:, mailto: and tel: via Linking. */
   onOpenUrl?: (url: string) => boolean;
   storage?: MentioraStorage;
+  /** Overrides the error screen's copy (the only chrome this SDK itself ever
+   *  draws — the hosted page draws everything else). An explicit `undefined`
+   *  on a key is ignored, falling back to the default for that key alone. */
+  strings?: Partial<MentioraStrings>;
 }
 
 export type MentioraWidgetProps = MentioraConfig;

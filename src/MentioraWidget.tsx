@@ -81,7 +81,7 @@
  */
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { BackHandler, Linking, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
 import { BridgeError, createHostPeer, type HostPeer } from './bridge/peer.js';
@@ -107,6 +107,89 @@ const SESSION_KEY_BYTES = 16;
  */
 const injection = (raw: string): string =>
   `window.mentioraHost.receive(${JSON.stringify(raw)});true;`;
+
+/**
+ * Task 11c, design.md §2.7: the page takes `max(env(safe-area-inset-*),
+ * --mw-host-inset-*)` and tracks `visualViewport` itself — we never claim
+ * `reportsViewport` (no test below or elsewhere injects that string).
+ *
+ * We set the four `--mw-host-inset-*` custom properties ONLY when we can
+ * actually measure something: `react-native-safe-area-context` when
+ * present (Expo Go bundles it; `initialWindowMetrics` is filled in by the
+ * native module at JS startup, so it works with no `<SafeAreaProvider>`
+ * ancestor — this widget cannot assume the host mounted one), else
+ * `StatusBar.currentHeight` on Android, where `env()` has no meaningful
+ * value in WebView before M136. iOS needs nothing from us: with neither the
+ * peer nor an Android fallback to reach for, `resolveHostInsets` returns
+ * `null` and nothing is injected at all — never a fabricated `0` passed off
+ * as a measurement the page would then trust as a floor.
+ */
+type HostInsets = { top: number; right: number; bottom: number; left: number };
+
+/**
+ * `react-native-safe-area-context` is an optional peer — resolved the way
+ * `storage.ts` resolves `@react-native-async-storage/async-storage`: guarded
+ * on `typeof require === 'function'` first (a bare `require` is emitted
+ * verbatim into the ESM build, where it has no synchronous form at all, and
+ * its `ReferenceError` would otherwise be swallowed by the `catch` below as
+ * "peer not installed" when the real reason is "this build cannot
+ * auto-resolve a peer synchronously at all"), then a try/catch around the
+ * require itself for the peer genuinely not being installed.
+ */
+const loadSafeAreaInsets = (
+  hasRequire: () => boolean = () => typeof require === 'function',
+): HostInsets | null => {
+  if (!hasRequire()) return null;
+  try {
+    const mod = require('react-native-safe-area-context') as {
+      initialWindowMetrics?: { insets: HostInsets } | null;
+    };
+    return mod.initialWindowMetrics?.insets ?? null;
+  } catch {
+    return null; // peer not installed
+  }
+};
+
+/**
+ * `load` is an injectable seam (mirrors `storage.ts`'s `resolveStorage`
+ * accepting `load`, and `random.ts`'s `globalCrypto`) so the Android
+ * fallback and the "nothing measurable" branch are each directly testable
+ * without fighting Jest's module cache for a peer that either is or is not
+ * actually installed in a given run — `__resolveHostInsetsForTest` below is
+ * the test-only hook onto it. Production always calls this with no
+ * arguments, i.e. the real `loadSafeAreaInsets`.
+ */
+const resolveHostInsets = (
+  load: () => HostInsets | null = loadSafeAreaInsets,
+): HostInsets | null => {
+  const measured = load();
+  if (measured) return measured;
+  if (Platform.OS === 'android')
+    return { top: StatusBar.currentHeight ?? 0, right: 0, bottom: 0, left: 0 };
+  return null; // iOS, no peer: nothing to measure, nothing to inject
+};
+
+/** Test-only (mirrors `runtime.ts`'s `__resetRuntimes`): exercises the
+ *  branch logic in `resolveHostInsets` directly. */
+export const __resolveHostInsetsForTest = resolveHostInsets;
+
+/**
+ * A plain style write, not a bridge message — `window.mentioraHost.receive`
+ * does not apply here — but it keeps `injection`'s own two invariants:
+ * every interpolated value goes through `JSON.stringify`, and the script
+ * ends in `true;`.
+ */
+const hostInsetsScript = (insets: HostInsets): string => {
+  const set = (name: string, px: number): string =>
+    `document.documentElement.style.setProperty(${JSON.stringify(name)}, ${JSON.stringify(`${px}px`)});`;
+  return (
+    set('--mw-host-inset-top', insets.top) +
+    set('--mw-host-inset-right', insets.right) +
+    set('--mw-host-inset-bottom', insets.bottom) +
+    set('--mw-host-inset-left', insets.left) +
+    'true;'
+  );
+};
 
 /**
  * Hands EVERY navigation to `onShouldStartLoadWithRequest`. Left at its default
@@ -222,6 +305,13 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     await Linking.openURL(url);
   }, []);
 
+  // Task 11c: does the page currently hold the hardware back button? Read
+  // fresh on every press (see `onHardwareBack` below) rather than trusted at
+  // face value — `peer.sessionKey()` is what actually proves a hold is still
+  // live, since a reload/remount resets it synchronously and this ref alone
+  // does not.
+  const backHeld = useRef(false);
+
   const peerRef = useRef<HostPeer | undefined>(undefined);
   if (!peerRef.current) {
     peerRef.current = createHostPeer({
@@ -290,8 +380,9 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         // text and MentioraEvent deliberately does not carry it (types.ts).
         onIdentityError: (reason) =>
           latest.current.props.onEvent?.({ type: 'identityError', reason }),
-        // Task 11c owns the BackHandler and the release protocol.
-        onBackHandling: () => {},
+        onBackHandling: (active) => {
+          backHeld.current = active;
+        },
       },
       warn: (message) => {
         if (__DEV__) console.warn(message);
@@ -525,6 +616,95 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     }
   };
 
+  // -- 11c: insets and Android back ------------------------------------
+
+  // Computed once — `StatusBar.currentHeight` and the optional peer do not
+  // change for the life of the app — and re-sent on every load boundary
+  // (mount, and every `onLoadEnd`, which fires for every reload too), since
+  // a fresh document has no CSS custom properties of its own until we set
+  // them again. `null` (nothing measurable, e.g. iOS with no peer) is itself
+  // a valid, memoized answer, so a separate guard ref tracks "computed yet",
+  // never `!hostInsets.current` alone — that would recompute (and re-attempt
+  // the `require`) on every render for exactly the hosts where it matters
+  // least to get wrong.
+  const hostInsetsComputed = useRef(false);
+  const hostInsets = useRef<HostInsets | null>(null);
+  if (!hostInsetsComputed.current) {
+    hostInsetsComputed.current = true;
+    hostInsets.current = resolveHostInsets();
+  }
+
+  // Reads only refs (`webview`, `hostInsets`), so `[]` is genuinely
+  // exhaustive, not a suppressed warning — this keeps one stable identity
+  // across renders, which is what lets the mount effect below run exactly
+  // once instead of on every render.
+  const injectHostInsets = useCallback((): void => {
+    const insets = hostInsets.current;
+    if (insets) webview.current?.injectJavaScript(hostInsetsScript(insets));
+  }, []);
+
+  // Mount-time injection is its own effect (not folded into `onLoadEnd`
+  // below) because the very first load's `onLoadEnd` has not fired yet when
+  // a test — or a slow real page — first inspects what we sent; `webview`
+  // is only attached once this runs, an effect being the one hook that runs
+  // after commit.
+  useEffect(() => {
+    injectHostInsets();
+  }, [injectHostInsets]);
+
+  /** design.md: "Either path dismisses only when the page has released the
+   *  button ... While the page holds it, `mentiora/back` goes to the page."
+   *  Default (nothing ever claimed, or already released): unhandled — the
+   *  host's own back/navigation handling dismisses the widget, since the
+   *  page draws no close control of its own to fall back on here.
+   *
+   *  `backHeld.current` alone is not trusted: it is set from a page message
+   *  and never told about a reload/remount that resets the session key out
+   *  from under it (11b's ladders do this on their own timetable, not
+   *  ours). `peer.sessionKey() !== null`, re-checked at PRESS TIME (not a
+   *  boolean read once), is what actually proves a hold is still live:
+   *  `resetLoad()` (11b's `advanceGeneration`) clears it synchronously on
+   *  every reload/remount, so the moment that has happened, back reverts to
+   *  unhandled on the very next press even if `backHeld` itself is still
+   *  stuck `true` — no proof-of-life round trip needed, because the session
+   *  key IS the proof. `sendBack()` is otherwise the one host-initiated
+   *  send with no such proof (every other send here is a reply); this is
+   *  what makes it safe: we only ever call it, and only ever claim the
+   *  press as handled, once a session exists in the CURRENT generation.
+   *
+   *  This one check also covers "the page claimed the button, then died"
+   *  (resolution 5) WITHOUT reading `errorCode`/`dismissed` at all: reaching
+   *  either of those states requires every ladder for the CURRENT
+   *  generation to have already given up, and 11b resets every ladder's own
+   *  counter/timer on any successful `initialize` (the crash and network
+   *  counters inside the `initialize` handler above; the watchdog timer
+   *  synchronously, in the same handler) — so a generation can only reach
+   *  its cap (and show the error surface) if it never had a live session to
+   *  begin with. A separate `errorCode`/`dismissed` guard was tried first
+   *  and deliberately removed: it could not be made to fail under mutation
+   *  (every construction that set `errorCode` already had `sessionKey()
+   *  === null`), which means it was unreachable dead weight, not defense
+   *  in depth. That unreachability is a property of 11b's CURRENT,
+   *  reviewed reset behaviour, not of this file — if a future change to
+   *  11b ever stops resetting a ladder's counter/timer on a successful
+   *  handshake, this single check stops being sufficient on its own, and
+   *  that coupling is worth knowing about before touching either side. */
+  const onHardwareBack = useCallback((): boolean => {
+    if (backHeld.current && peer.sessionKey() !== null) {
+      peer.sendBack();
+      return true;
+    }
+    return false;
+  }, [peer]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    // `.remove()` on the subscription BackHandler.addEventListener returns —
+    // never `BackHandler.removeEventListener`, deleted in RN 0.77, which
+    // throws if called.
+    return () => subscription.remove();
+  }, [onHardwareBack]);
+
   const onMessage = useCallback(
     (event: MessageEvent) => {
       const raw = event.nativeEvent.data;
@@ -597,7 +777,13 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         onError={onError}
         onContentProcessDidTerminate={onContentProcessDidTerminate}
         onRenderProcessGone={onRenderProcessGone}
-        onLoadEnd={onLoadEnd}
+        onLoadEnd={(event) => {
+          onLoadEnd(event);
+          // A fresh document (this reload's own) has none of the previous
+          // one's custom properties — re-set them every time a load
+          // actually finishes, not just once at mount (11c).
+          injectHostInsets();
+        }}
         // The overlay below covers this WebView but does not remove it from
         // the tree (see its own comment), so without this a screen reader
         // can still reach the dead page underneath the one screen that is
@@ -615,7 +801,12 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         // the current screen, matching Android's `importantForAccessibility`
         // above on the WebView it is covering.
         <View style={StyleSheet.absoluteFill} accessibilityViewIsModal={true}>
-          <ErrorScreen code={errorCode} onRetry={onRetry} onDismiss={onDismiss} />
+          <ErrorScreen
+            strings={props.strings}
+            code={errorCode}
+            onRetry={onRetry}
+            onDismiss={onDismiss}
+          />
         </View>
       )}
     </View>
