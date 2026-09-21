@@ -80,11 +80,11 @@
  * component is being torn down" hook to hang it on instead.
  */
 import type React from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { BackHandler, Linking, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
-import { setBackHandler } from './back-hold.js';
+import { BackChannelContext } from './back-channel.js';
 import { BridgeError, createHostPeer, type HostPeer } from './bridge/peer.js';
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
 import { isAllowedExternal, isSameOrigin } from './links.js';
@@ -346,6 +346,12 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // does not.
   const backHeld = useRef(false);
 
+  // Task 12 (fix round 3): non-null only when a `<MentioraHost />`'s Modal is
+  // an ancestor — `back-channel.ts`'s own header has the full reasoning. An
+  // inline widget with no such ancestor gets `null` here and this is a no-op
+  // everywhere below; it keeps using `BackHandler` exactly as before.
+  const registerBackPress = useContext(BackChannelContext);
+
   const peerRef = useRef<HostPeer | undefined>(undefined);
   if (!peerRef.current) {
     peerRef.current = createHostPeer({
@@ -416,16 +422,6 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
           latest.current.props.onEvent?.({ type: 'identityError', reason }),
         onBackHandling: (active) => {
           backHeld.current = active;
-          // Task 12 (fix round 1): the presenter's Modal lives in a different
-          // component and can't reach `peerRef` directly — `back-hold.ts` is
-          // the one channel it reads instead (never a new public prop/event
-          // on `MentioraConfig`). It carries the send function itself, not a
-          // boolean, so the Modal path can actually forward the press to the
-          // page, the same as `onHardwareBack` does inline.
-          setBackHandler(
-            latest.current.props.embedKey,
-            active ? () => peerRef.current?.sendBack() : null,
-          );
         },
       },
       warn: (message) => {
@@ -445,6 +441,17 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   const [errorCode, setErrorCode] = useState<MentioraErrorCode | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [remountKey, setRemountKey] = useState(0);
+
+  // Task 12 (fix round 3, Major 8): design.md §2.4's "logout() ... reloads
+  // whichever widgets are mounted" applies to EVERY mounted widget, inline or
+  // Modal-hosted — subscribing HERE, not in the presenter, is what covers
+  // both. `runtime` (not `latest.current.runtime`) as the dependency: it's
+  // the SAME object across renders for a given `embedKey` (`getRuntime`
+  // memoises per key and only swaps `runtime.identity` in place), so this
+  // resubscribes only if the embed key itself changes, never on every render.
+  useEffect(() => {
+    return runtime.onReload(() => setRemountKey((k) => k + 1));
+  }, [runtime]);
 
   const generation = useRef(0);
   // Has THIS generation already had its one terminal callback? Shared across
@@ -574,9 +581,6 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     return () => {
       if (watchdogTimer.current !== null) clearTimeout(watchdogTimer.current);
       if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
-      // Task 12: an unmounted widget must not leave a stale handler for the
-      // presenter's Modal (a different, still-mounted component) to call.
-      setBackHandler(latest.current.props.embedKey, null);
     };
   }, []);
 
@@ -755,14 +759,23 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    // Task 12 (fix round 3): the SAME decision, handed to the Modal's
+    // `onRequestClose` too, when one is an ancestor — never a second,
+    // re-derived one. Registering/deregistering here (not a separate effect)
+    // means a fresh `onHardwareBack` closure (`dismissed`/`errorCode` changed)
+    // replaces the old registration atomically, and unmount always clears it.
+    registerBackPress?.(onHardwareBack);
     // `.remove()` on the subscription BackHandler.addEventListener returns —
     // never `BackHandler.removeEventListener`, deleted in RN 0.77, which
     // throws if called. Re-subscribing when `dismissed`/`errorCode` change
     // (both flow into `onHardwareBack`'s identity via its own deps) is fine:
     // `.remove()` on the way out always pairs with the `addEventListener`
     // that produced it.
-    return () => subscription.remove();
-  }, [onHardwareBack]);
+    return () => {
+      subscription.remove();
+      registerBackPress?.(null);
+    };
+  }, [onHardwareBack, registerBackPress]);
 
   const onMessage = useCallback(
     (event: MessageEvent) => {

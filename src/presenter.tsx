@@ -32,13 +32,28 @@
  *
  * So: the customer mounts `<MentioraHost />` once, at their app root (above
  * their navigator). `Mentiora.open()` throws a distinct, actionable error if
- * none is currently mounted — detected by whether any host is subscribed,
- * never by guessing.
+ * none is currently mounted — counted from RENDER, not from subscribe (see
+ * `hostIds` below; fix round 3, Major 5) so it can't false-negative on a host
+ * that mounts later in the same commit as its caller.
+ *
+ * **The back channel is the widget's own decision (fix round 3, Criticals 1
+ * and 2).** `onRequestClose` used to read a module-level map (keyed by
+ * `embedKey`) written by the widget's `onBackHandling` peer handler, plus a
+ * `blocked` ref of its own. Both were wrong: the map's `sendBack()` silently
+ * no-ops once a transient reload clears the session key, which
+ * `onRequestClose` never checked, leaving the Modal's back button
+ * permanently dead after one blip; and keying by `embedKey` let an INLINE
+ * widget on the SAME embed key (design.md §3.1's own example app) hijack or
+ * erase the Modal's registration. `back-channel.ts` now carries the widget's
+ * existing `onHardwareBack` — already `() => boolean`, already correct —
+ * registered per WIDGET INSTANCE through an internal context `ModalBody`
+ * provides. See `back-channel.ts`'s own header for the rest.
  */
 import type React from 'react';
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { Modal } from 'react-native';
-import { getBackHandler } from './back-hold.js';
+import type { BackPress } from './back-channel.js';
+import { BackChannelContext } from './back-channel.js';
 import { MentioraWidget } from './MentioraWidget.js';
 import { getRuntime } from './runtime.js';
 import type { MentioraConfig, MentioraEvent } from './types.js';
@@ -46,20 +61,27 @@ import type { MentioraConfig, MentioraEvent } from './types.js';
 type PresenterState = {
   visible: boolean;
   config: MentioraConfig | null;
-  /** Bumped by the runtime's `onReload` subscription (logout while the Modal
-   *  is open) to force `<MentioraWidget />` to remount with a fresh WebView,
-   *  the same "fresh page load" contract `Mentiora.open()` itself gives. */
-  reloadKey: number;
   /** Which mounted `<MentioraHost />` (by its own id, below) is the one
    *  allowed to render the Modal — see "two hosts" below. */
   activeHostId: number | null;
 };
 
-let state: PresenterState = { visible: false, config: null, reloadKey: 0, activeHostId: null };
+let state: PresenterState = { visible: false, config: null, activeHostId: null };
 const listeners = new Set<() => void>();
-/** Mounted host ids, oldest first — a plain array doubles as both "how many
- *  hosts are mounted" (for `open()`'s check) and "who's next" (for the
- *  promotion below). */
+/** Hosts currently RENDERED, oldest first — pushed to during RENDER (see
+ *  `MentioraHost` below), not during the subscribe effect `registerHost`
+ *  runs from. Fix round 3, Major 5: `useSyncExternalStore` subscribes in a
+ *  PASSIVE EFFECT, which runs after every component's render in the same
+ *  commit has already happened but interleaved with OTHER components' own
+ *  effects in tree order — so a host mounted after the screen that calls
+ *  `open()` (from its own mount effect) would not have subscribed yet when
+ *  that effect ran, and `open()` would reject with "no host mounted" even
+ *  though one is three lines below in the same tree. Counting from render
+ *  instead means membership is settled before ANY effect in the commit runs,
+ *  regardless of JSX sibling order. Caveat accepted deliberately: a host
+ *  that renders but never commits leaks an id here, which fails in the
+ *  benign direction (`open()` succeeds, nothing ends up rendering) rather
+ *  than the noisy false-alarm this replaces. */
 const hostIds: number[] = [];
 let nextHostId = 0;
 
@@ -78,7 +100,6 @@ const notify = (): void => {
  */
 const registerHost = (id: number, onChange: () => void): (() => void) => {
   listeners.add(onChange);
-  hostIds.push(id);
   if (state.activeHostId === null) state = { ...state, activeHostId: id };
   notify();
   return () => {
@@ -105,7 +126,7 @@ export const Mentiora = {
         'Mentiora.open() was called before Mentiora.configure(config). Call Mentiora.configure() first.',
       );
     }
-    if (listeners.size === 0) {
+    if (hostIds.length === 0) {
       throw new Error(
         'Mentiora.open() needs <MentioraHost /> mounted once at your app root. Add it above your navigator.',
       );
@@ -114,20 +135,33 @@ export const Mentiora = {
     notify();
   },
   /** Not a programming error to call before `configure()`/while already
-   *  closed — closing something that was never open is a no-op, not a throw. */
+   *  closed — closing something that was never open is a no-op, not a throw.
+   *  Deliberately asymmetric with `logout()` below: there is nothing to undo
+   *  here, so a mutation that made this throw too (mirroring `logout()`'s own
+   *  guard) would be wrong, not merely redundant. */
   close(): void {
     if (!state.config || !state.visible) return;
     state = { ...state, visible: false };
     notify();
   },
   /** Host state, not view state (design.md §2.4): rotates the install id and
-   *  clears the shared identity cache immediately through the runtime, then
-   *  notifies whichever widgets are mounted. With the Modal closed and no
-   *  inline widget there is nothing to notify, and that is not an error — the
-   *  next mount/`open()` initializes with the rotated state. Reached through
-   *  `getRuntime`, never through a mounted component. */
+   *  clears the shared identity cache immediately through the runtime.
+   *  Reached through `getRuntime`, never through a mounted component — every
+   *  mounted `<MentioraWidget />` (inline or Modal-hosted) subscribes to
+   *  `runtime.onReload` itself and reloads on its own (`MentioraWidget.tsx`).
+   *
+   *  Throws before `configure()`, unlike `close()`: a caller that reached
+   *  `logout()` has, by definition, a user to sign out, and silently
+   *  resolving without rotating anything would strand the PREVIOUS user's
+   *  install id and `wasSignedIn` flag in storage for the next person on the
+   *  device to inherit — undiagnosable, since nothing here would ever say so
+   *  (fix round 3, Major 6). */
   async logout(): Promise<void> {
-    if (!state.config) return;
+    if (!state.config) {
+      throw new Error(
+        'Mentiora.logout() was called before Mentiora.configure(config). Call Mentiora.configure() first.',
+      );
+    }
     await getRuntime(state.config).logout();
   },
 };
@@ -140,7 +174,7 @@ export const Mentiora = {
  *  configure() first" at a customer who already had. Tests reset explicitly
  *  instead. */
 export const __resetPresenter = (): void => {
-  state = { visible: false, config: null, reloadKey: 0, activeHostId: null };
+  state = { visible: false, config: null, activeHostId: null };
   listeners.clear();
   hostIds.length = 0;
   nextHostId = 0;
@@ -149,7 +183,14 @@ export const __resetPresenter = (): void => {
 /** The component a host app mounts once, at its app root. */
 export function MentioraHost(): React.JSX.Element | null {
   const id = useRef<number | undefined>(undefined);
-  if (id.current === undefined) id.current = nextHostId++;
+  if (id.current === undefined) {
+    id.current = nextHostId++;
+    // Membership in `hostIds` is counted from RENDER (see the array's own
+    // doc comment above), guarded the same way `id.current` itself is so a
+    // React-internal double-invoke of this render (StrictMode) reuses the
+    // same id and pushes exactly once.
+    hostIds.push(id.current);
+  }
   const hostId = id.current;
 
   const subscribeThis = useCallback(
@@ -160,65 +201,53 @@ export function MentioraHost(): React.JSX.Element | null {
 
   if (snapshot.activeHostId !== hostId) return null; // another mounted host owns the Modal
   if (!snapshot.visible || !snapshot.config) return null;
-  return <ModalBody config={snapshot.config} reloadKey={snapshot.reloadKey} />;
+  return <ModalBody config={snapshot.config} />;
 }
 
-function ModalBody({
-  config,
-  reloadKey,
-}: {
-  config: MentioraConfig;
-  reloadKey: number;
-}): React.JSX.Element {
-  // Set once a session ever reaches the error surface, and never cleared for
-  // the life of THIS mount (a fresh key/open cycle is a fresh instance, hence
-  // a fresh ref) — mirrors `onHardwareBack`'s own `dismissed || errorCode !==
-  // null` guard, which `onRequestClose` needs for the same reason (see the
-  // file header on 11c's watchdog give-up branch). `{type:'close'}` doesn't
-  // need to set this itself: it unmounts `ModalBody` outright via
-  // `Mentiora.close()` below, which is a stronger guarantee than a ref.
-  const blocked = useRef(false);
-
-  useEffect(() => {
-    return getRuntime(config).onReload(() => {
-      state = { ...state, reloadKey: state.reloadKey + 1 };
-      notify();
-    });
-  }, [config]);
+function ModalBody({ config }: { config: MentioraConfig }): React.JSX.Element {
+  // Provided to `MentioraWidget` (via `BackChannelContext`) so it can hand us
+  // its own `onHardwareBack` — the SAME decision the hardware button uses,
+  // by construction, not a re-derived one. A ref, not state: `onRequestClose`
+  // needs to read whatever is CURRENTLY registered at press time, and a
+  // registration changing (a fresh `dismissed`/`errorCode` closure) has
+  // nothing for `ModalBody` itself to re-render over.
+  const backPress = useRef<BackPress | null>(null);
+  const registerBackPress = useCallback((press: BackPress | null): void => {
+    backPress.current = press;
+  }, []);
 
   const onEvent = useCallback(
     (event: MentioraEvent) => {
-      config.onEvent?.(event);
-      if (event.type === 'error') blocked.current = true;
-      // The page asked to close (its own control, or ErrorScreen's Dismiss) —
-      // an empty Modal left showing over nothing is not a graceful exit.
+      // Our own bookkeeping BEFORE the host callback, not after (fix round 3,
+      // Major 7): `MentioraWidget`'s own Dismiss path wraps ITS `onEvent` call
+      // in try/catch ("the one call that must not be able to take the exit
+      // down with it") — calling the host callback first let a host that
+      // throws on `{type:'close'}` get swallowed by that same try/catch,
+      // skipping `Mentiora.close()` entirely and stranding a `visible={true}`
+      // Modal over the blank `<View />` Dismiss just rendered, with no escape
+      // on iOS (Android still had `onRequestClose`, only by accident).
       if (event.type === 'close') Mentiora.close();
+      config.onEvent?.(event);
     },
     [config],
   );
 
-  // Fix round 1: while the page holds the button, this now actually forwards
-  // `mentiora/back` (via the widget's own `sendBack`, reached through
-  // `back-hold.ts` — a plain boolean here left the page never told a press
-  // happened at all, so it could never release the hold: back was dead for
-  // the life of the Modal, exactly the trap 11b/11c both exist to close).
-  // `blocked` is checked first, same reasoning as `onHardwareBack`'s own
-  // `dismissed || errorCode !== null` guard: once the error surface is up, a
-  // late/stale hold must not keep forwarding into whatever is now showing.
+  // While the page holds the button, this asks the widget's OWN
+  // `onHardwareBack` — never a re-derived boolean — whether the press was
+  // handled. `onHardwareBack` already checks `dismissed`, `errorCode !==
+  // null`, `backHeld`, and `peer.sessionKey() !== null` at press time, so a
+  // stale hold left behind by a reload that has since cleared the session
+  // key already reads as unhandled — no separate latch needed here.
   const onRequestClose = useCallback((): void => {
-    if (!blocked.current) {
-      const sendBack = getBackHandler(config.embedKey);
-      if (sendBack) {
-        sendBack();
-        return; // held: stay open, the page now knows a press happened
-      }
-    }
+    if (backPress.current?.()) return; // handled: stay open
     Mentiora.close();
-  }, [config]);
+  }, []);
 
   return (
-    <Modal visible onRequestClose={onRequestClose}>
-      <MentioraWidget key={reloadKey} {...config} onEvent={onEvent} />
-    </Modal>
+    <BackChannelContext.Provider value={registerBackPress}>
+      <Modal visible onRequestClose={onRequestClose}>
+        <MentioraWidget {...config} onEvent={onEvent} />
+      </Modal>
+    </BackChannelContext.Provider>
   );
 }

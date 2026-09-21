@@ -38,17 +38,34 @@ import { MentioraWidget } from '@mentiora/react-native-sdk';
 />
 ```
 
-Or present it over your app:
+Or present it over your app. Mount `<MentioraHost />` once, at your app root
+above the navigator — it renders nothing until `open()` is called, and is
+what gives `open()` somewhere to present the widget's `Modal`:
 
-```ts
-import { Mentiora } from '@mentiora/react-native-sdk';
+```tsx
+import { Mentiora, MentioraHost } from '@mentiora/react-native-sdk';
 
 Mentiora.configure({ widgetOrigin, embedKey, identity });
 
+export default function App() {
+  return (
+    <>
+      <MentioraHost />
+      <YourNavigator />
+    </>
+  );
+}
+```
+
+Then, from anywhere else in the app:
+
+```ts
 await Mentiora.open();
 Mentiora.close();
 await Mentiora.logout(); // rotates the install id and drops the cached token
 ```
+
+`Mentiora.open()` throws if `<MentioraHost />` isn't mounted yet.
 
 Omit `identity` for anonymous chat. `widgetOrigin` and `embedKey` come from the
 install snippet in Mentiora admin.
