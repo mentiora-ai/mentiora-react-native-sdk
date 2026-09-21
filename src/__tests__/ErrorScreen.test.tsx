@@ -28,6 +28,32 @@ test('a partial strings override replaces only what it names', async () => {
   expect(screen.getByText(DEFAULT_STRINGS.dismiss)).toBeTruthy();
 });
 
+test('an explicit undefined in strings falls back to the default, not a blank control', async () => {
+  await render(
+    <ErrorScreen
+      code="load_failed"
+      onRetry={jest.fn()}
+      onDismiss={jest.fn()}
+      strings={{ retry: undefined }}
+    />,
+  );
+  // getByRole with name proves the accessibilityLabel came back too, not just the visible text.
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
+});
+
+test('an override alongside an undefined applies the override and falls back for the undefined key', async () => {
+  await render(
+    <ErrorScreen
+      code="load_failed"
+      onRetry={jest.fn()}
+      onDismiss={jest.fn()}
+      strings={{ retry: 'Nochmal', dismiss: undefined }}
+    />,
+  );
+  expect(screen.getByRole('button', { name: 'Nochmal' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
+});
+
 test('every code renders the same sentence — the code is for onEvent, not for the user', async () => {
   for (const code of ['load_failed', 'handshake_timeout', 'renderer_crashed'] as const) {
     const view = await render(

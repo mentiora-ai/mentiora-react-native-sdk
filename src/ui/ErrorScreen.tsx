@@ -21,7 +21,15 @@ export type ErrorScreenProps = {
  */
 export function ErrorScreen(props: ErrorScreenProps): React.JSX.Element {
   const { strings, onRetry, onDismiss } = props;
-  const s = { ...DEFAULT_STRINGS, ...strings };
+  // A plain `{ ...DEFAULT_STRINGS, ...strings }` spread lets an explicit
+  // `undefined` (e.g. `strings={{ retry: cond ? 'x' : undefined }}`) blank a
+  // control's label — on the one screen whose only exit must never go
+  // invisible. Skip keys the caller set to undefined instead of applying them.
+  const s = { ...DEFAULT_STRINGS };
+  for (const key of Object.keys(DEFAULT_STRINGS) as (keyof MentioraStrings)[]) {
+    const value = strings?.[key];
+    if (value !== undefined) s[key] = value;
+  }
 
   return (
     <View style={styles.container}>
