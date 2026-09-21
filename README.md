@@ -7,10 +7,6 @@ that hosts the Mentiora widget page and implements the host side of the mobile
 bridge protocol v1. No native module, so it runs in Expo Go, Expo dev builds and
 bare React Native.
 
-> **Status: scaffold.** `0.0.1` reserves the package name and proves the release
-> path. The public API below is present as types; every implementation throws.
-> The bridge lands in `0.1.0`.
-
 ## Install
 
 ```sh

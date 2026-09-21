@@ -1,56 +1,34 @@
 /**
- * Public API for @mentiora/react-native-sdk.
+ * Public API for @mentiora/react-native-sdk (design.md §1).
  *
- * Scaffold stub: the shapes below are the approved v0 surface (design.md §1).
- * Every implementation throws until the bridge lands, so the packaging, the
- * emitted .d.ts and the consumer install check are all exercised before any
- * protocol code exists.
+ * Exports only — no logic lives here. Every name below is a public API
+ * commitment, so they are listed one by one: `export *` from
+ * `./MentioraWidget.js` or `./presenter.js` would also ship their
+ * `__`-prefixed test helpers, and `./back-channel.js` is internal plumbing
+ * that is deliberately absent.
+ *
+ * The `.js` extensions are load-bearing: `tsconfig` emits ESM into
+ * `lib/module`, where an extensionless specifier does not resolve.
  */
 
-import { SDK_VERSION } from './version.js';
-
-export { SDK_NAME, SDK_VERSION } from './version.js';
-
-import type { MentioraConfig, MentioraWidgetProps } from './types.js';
-
+export { MentioraWidget } from './MentioraWidget.js';
+/**
+ * `Mentiora` presents the widget over a Modal; `MentioraHost` is the
+ * component the customer mounts once at their app root to host it —
+ * `Mentiora.open()` throws without one. The Modal mounts a fresh WebView on
+ * every open (design.md §2.7); the page resumes the thread from server state,
+ * so nothing is kept alive between opens.
+ */
+export { Mentiora, MentioraHost } from './presenter.js';
 export type {
   MentioraConfig,
+  MentioraErrorCode,
   MentioraEvent,
   MentioraIdentity,
   MentioraIdentityCallback,
   MentioraIdentityFetcher,
   MentioraStorage,
+  MentioraStrings,
   MentioraWidgetProps,
 } from './types.js';
-
-const notImplemented = (what: string): never => {
-  throw new Error(
-    `@mentiora/react-native-sdk@${SDK_VERSION}: ${what} is not implemented yet. ` +
-      'This is a scaffold release; the bridge lands in 0.1.0.',
-  );
-};
-
-/** Embed the widget inline. Renders no chrome: the page draws its own header. */
-export function MentioraWidget(_props: MentioraWidgetProps): never {
-  return notImplemented('<MentioraWidget />');
-}
-
-/**
- * Presenter. Keeps one WebView mounted across open and close, so opening does
- * not reload the page.
- */
-export const Mentiora = {
-  configure(_config: MentioraConfig): void {
-    notImplemented('Mentiora.configure()');
-  },
-  open(): Promise<void> {
-    return notImplemented('Mentiora.open()');
-  },
-  close(): void {
-    notImplemented('Mentiora.close()');
-  },
-  /** Rotates the install id, drops the cached token and reloads the page. */
-  logout(): Promise<void> {
-    return notImplemented('Mentiora.logout()');
-  },
-};
+export { SDK_NAME, SDK_VERSION } from './version.js';

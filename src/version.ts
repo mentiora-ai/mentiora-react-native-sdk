@@ -3,4 +3,4 @@
 // /^[0-9A-Za-z.+-]{1,64}$/, so it is a literal rather than a runtime read of
 // package.json, which is not resolvable under Metro.
 export const SDK_NAME = '@mentiora/react-native-sdk';
-export const SDK_VERSION = '0.0.1';
+export const SDK_VERSION = '0.1.0';

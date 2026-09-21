@@ -15,6 +15,7 @@ import {
 import { MentioraWidget } from '../MentioraWidget';
 import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes } from '../runtime';
+import { SDK_NAME, SDK_VERSION } from '../version';
 
 const ORIGIN = 'https://w.x.ai';
 const KEY = 'pk_wgt_a';
@@ -102,7 +103,11 @@ test('answers initialize with OUR protocol version and a session key', async () 
   expect(typeof reply.result?.sessionKey).toBe('string');
   expect((reply.result?.sessionKey as string | undefined)?.length ?? 0).toBeGreaterThan(0);
   expect(typeof reply.result?.installId).toBe('string');
-  expect(reply.result?.sdk).toEqual({ name: '@mentiora/react-native-sdk', version: '0.0.1' });
+  // Reads the generated constants rather than a literal: a literal breaks on
+  // every version bump, while what this asserts is that the handler reports OUR
+  // descriptor at all. A stale version.ts is caught by the release guard
+  // (test/release-guard.test.mjs, scripts/assert-version.mjs), not here.
+  expect(reply.result?.sdk).toEqual({ name: SDK_NAME, version: SDK_VERSION });
 });
 
 test('an unsupported protocolVersion still gets a result, never -32005', async () => {
