@@ -50,7 +50,7 @@
  * provides. See `back-channel.ts`'s own header for the rest.
  */
 import type React from 'react';
-import { useCallback, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { Modal } from 'react-native';
 import type { BackPress } from './back-channel.js';
 import { BackChannelContext } from './back-channel.js';
@@ -68,20 +68,33 @@ type PresenterState = {
 
 let state: PresenterState = { visible: false, config: null, activeHostId: null };
 const listeners = new Set<() => void>();
-/** Hosts currently RENDERED, oldest first — pushed to during RENDER (see
- *  `MentioraHost` below), not during the subscribe effect `registerHost`
- *  runs from. Fix round 3, Major 5: `useSyncExternalStore` subscribes in a
- *  PASSIVE EFFECT, which runs after every component's render in the same
- *  commit has already happened but interleaved with OTHER components' own
- *  effects in tree order — so a host mounted after the screen that calls
- *  `open()` (from its own mount effect) would not have subscribed yet when
- *  that effect ran, and `open()` would reject with "no host mounted" even
- *  though one is three lines below in the same tree. Counting from render
- *  instead means membership is settled before ANY effect in the commit runs,
- *  regardless of JSX sibling order. Caveat accepted deliberately: a host
- *  that renders but never commits leaks an id here, which fails in the
- *  benign direction (`open()` succeeds, nothing ends up rendering) rather
- *  than the noisy false-alarm this replaces.
+/** Hosts currently IN THE TREE, oldest first — written from `MentioraHost`'s
+ *  own `useLayoutEffect`, not from its render body and not from the subscribe
+ *  effect `registerHost` runs from. Fix round 3, Major 5:
+ *  `useSyncExternalStore` subscribes in a PASSIVE EFFECT, which runs after
+ *  every component's render in the same commit has already happened but
+ *  interleaved with OTHER components' own effects in tree order — so a host
+ *  mounted after the screen that calls `open()` (from its own mount effect)
+ *  would not have subscribed yet when that effect ran, and `open()` would
+ *  reject with "no host mounted" even though one is three lines below in the
+ *  same tree.
+ *
+ *  The LAYOUT phase is what keeps that fixed while dropping the phantom
+ *  (re-review, F9). React runs every layout effect in a commit before any
+ *  passive effect in it, so membership is still settled before the `open()`
+ *  above can run — regardless of JSX sibling order — while only renders that
+ *  actually COMMITTED ever reach it. The render-time push this replaces was
+ *  not benign after all: a host that renders and is thrown away (a
+ *  `<Suspense>` sibling suspending, an interrupted transition, React 18's
+ *  StrictMode double render) left its id here forever, and since `open()` also
+ *  sets `visible: true` with nothing to clear it, the next host to COMMIT
+ *  popped the Modal unbidden with no `open()` call behind it. Under StrictMode
+ *  that is one phantom per host mount, which kills the "needs
+ *  `<MentioraHost />`" error outright for the life of the process.
+ *  Caveat, deliberately accepted: an `open()` issued from a customer's own
+ *  `useLayoutEffect` is now sibling-order dependent. A render-time push was
+ *  not — but it cannot tell a committed render from a discarded one, and that
+ *  is the more expensive of the two.
  *
  *  The invariant this array keeps (fix round 4, Critical 2) is SET
  *  membership, not a push/pop log: an id is added when the host renders AND
@@ -128,9 +141,9 @@ const notify = (): void => {
 const registerHost = (id: number, onChange: () => void): (() => void) => {
   listeners.add(onChange);
   // Idempotent re-add, not a second source of truth (fix round 4, Critical 2).
-  // Render is what FIRST counts a host (see `hostIds` above, and `MentioraHost`
-  // below); this line only restores membership that a previous teardown of
-  // this same, still-mounted component removed. React 18/19 StrictMode — the
+  // The layout effect is what FIRST counts a host (see `hostIds` above, and
+  // `MentioraHost` below); this line only restores membership that a previous
+  // teardown of this same, still-mounted component removed. React 18/19 StrictMode — the
   // RN and Expo templates' default — mounts effects, tears them down and
   // mounts them again WITHOUT re-rendering, so the render-time push runs once
   // while the splice below runs twice: without this, the id is gone forever
@@ -230,15 +243,21 @@ export const __resetPresenter = (): void => {
 /** The component a host app mounts once, at its app root. */
 export function MentioraHost(): React.JSX.Element | null {
   const id = useRef<number | undefined>(undefined);
-  if (id.current === undefined) {
-    id.current = nextHostId++;
-    // Membership in `hostIds` is counted from RENDER (see the array's own
-    // doc comment above), guarded the same way `id.current` itself is so a
-    // React-internal double-invoke of this render (StrictMode) reuses the
-    // same id and pushes exactly once.
-    hostIds.push(id.current);
-  }
+  if (id.current === undefined) id.current = nextHostId++;
   const hostId = id.current;
+
+  // Membership in `hostIds` is counted from the LAYOUT phase (see the array's
+  // own doc comment above): early enough that a same-commit `open()` from any
+  // passive effect still sees this host, late enough that a render which never
+  // commits never counts. Idempotent by construction, so StrictMode's
+  // mount/teardown/mount of effects is a no-op.
+  useLayoutEffect(() => {
+    if (!hostIds.includes(hostId)) hostIds.push(hostId);
+    return () => {
+      const index = hostIds.indexOf(hostId);
+      if (index >= 0) hostIds.splice(index, 1);
+    };
+  }, [hostId]);
 
   const subscribeThis = useCallback(
     (onChange: () => void): (() => void) => registerHost(hostId, onChange),

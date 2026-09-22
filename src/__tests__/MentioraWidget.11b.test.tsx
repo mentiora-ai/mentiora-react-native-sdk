@@ -11,6 +11,7 @@
 // timer's callback would fire but its own internal awaits would never
 // resolve within the same synchronous tick.
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { StrictMode, Suspense } from 'react';
 import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
 import { RANDOM_REPLY_TAG } from '../random';
@@ -491,4 +492,100 @@ test('a clean handshake between crashes does not buy a fresh crash budget', asyn
   }
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'renderer_crashed' });
   expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
+});
+
+// --- Re-review, F7 / F8: renders that never commit, and awaits that outlive
+// the component ---
+
+/** A sibling that suspends on its FIRST render and resolves after `release()`,
+ *  so the boundary's children render once, are thrown away, and then mount for
+ *  real. The discarded pass is the one that used to arm a timer. */
+const suspendOnce = () => {
+  const state = { done: false };
+  let settle!: () => void;
+  const gate = new Promise<void>((r) => {
+    settle = r;
+  });
+  const Suspends = (): null => {
+    if (!state.done) throw gate;
+    return null;
+  };
+  return {
+    Suspends,
+    release: () => {
+      state.done = true;
+      settle();
+    },
+  };
+};
+
+// `armWatchdog()` used to run in the RENDER BODY, ref-guarded against
+// re-renders but not against renders that never commit. The discarded render's
+// closure holds the REAL host's `onEvent` (same props object), so ~16s later
+// the host is told a healthy widget timed out.
+//
+// Catches moving `armWatchdog()` back out of the `[]` effect into the render
+// body.
+test('a render that never commits leaves no watchdog behind', async () => {
+  const onEvent = jest.fn();
+  const { Suspends, release } = suspendOnce();
+  await render(
+    <Suspense fallback={null}>
+      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />
+      <Suspends />
+    </Suspense>,
+  );
+  await act(async () => {
+    release();
+  });
+
+  // The real widget committed and handshook immediately, so nothing legitimate
+  // can time out here.
+  await initialize(screen.getByTestId('mentiora-webview'));
+  await advance(20000);
+  expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});
+
+// Re-review, F7 (the other half). StrictMode mounts effects, tears them down
+// and mounts them again. The render-armed timer was cleared by that simulated
+// unmount and the ref guard stopped anything from re-arming, so the 8s floor
+// was dead in the RN/Expo template's default dev setup: a document that never
+// finishes loading and never errors showed a blank widget with no error
+// surface for as long as the platform's own request timeout.
+//
+// Catches deleting `armWatchdog()` from the `[]` effect.
+test("the 8s floor survives StrictMode's simulated unmount", async () => {
+  const onEvent = jest.fn();
+  await render(
+    <StrictMode>
+      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />
+    </StrictMode>,
+  );
+  await advance(20000);
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});
+
+// The unmount cleanup cleared the timers that existed AT THAT MOMENT but left
+// `generation.current` alone, so an `initialize` still parked on the
+// random-bytes round trip (or on identity, or on an install-id mint) rejected
+// afterwards, passed its own generation check, re-armed the watchdog on a dead
+// instance, and ~18s later handed the host `{type:'error',
+// code:'handshake_timeout'}` for a chat the user had already closed.
+//
+// Catches deleting `generation.current += 1` from the `[]` effect's cleanup.
+test('an initialize rejecting after unmount never reaches the host', async () => {
+  const realCrypto = globalThis.crypto;
+  // No host WebCrypto: the session key needs a round trip to the page, which
+  // nothing here will ever answer, so the handler parks and then rejects.
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
+  try {
+    const onEvent = jest.fn();
+    const el = await mount(onEvent);
+    await initialize(el);
+    screen.unmount(); // the user closes the chat while the handshake is parked
+    await advance(22000);
+    expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+  } finally {
+    Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
+  }
 });

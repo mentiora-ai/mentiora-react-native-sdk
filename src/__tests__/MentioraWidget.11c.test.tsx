@@ -3,6 +3,7 @@
 // Task 11c: insets (`--mw-host-inset-*`) and Android's hardware back button —
 // the release protocol (`mentiora/backHandling`) and `.remove()` teardown.
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { useLayoutEffect } from 'react';
 import { BackHandler, Platform, StatusBar } from 'react-native';
 import { __lastWebView, __resetWebViews } from '../../__mocks__/react-native-webview';
 import {
@@ -403,4 +404,38 @@ test('a strings override on the public config reaches the rendered error screen'
   } finally {
     jest.useRealTimers();
   }
+});
+
+// --- Re-review, F10 ---
+//
+// The BackHandler listener and the Modal's `backPress` registration were
+// refreshed in a PASSIVE effect. `onHardwareBack` closes over
+// `dismissed`/`errorCode`, and `showError` runs from a timer — a non-discrete
+// lane whose passive effects flush on the scheduler's next task. A press
+// landing in that gap ran the previous closure and, while the page held the
+// button, forwarded `mentiora/back` to a page sitting under the error surface
+// instead of closing.
+//
+// React runs EVERY layout effect in a commit before ANY passive effect, so a
+// sibling's `useLayoutEffect` is inside the gap by construction: it sees the
+// registration only when the widget registers from the commit phase too.
+//
+// Catches changing the registration's `useLayoutEffect` back to `useEffect`.
+test('the back registration lands in the commit, not in the passive flush', async () => {
+  const add = BackHandler.addEventListener as jest.Mock;
+  add.mockClear();
+  let registeredByLayoutTime = 0;
+  function Probe(): null {
+    useLayoutEffect(() => {
+      registeredByLayoutTime = add.mock.calls.length;
+    }, []);
+    return null;
+  }
+  await render(
+    <>
+      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />
+      <Probe />
+    </>,
+  );
+  expect(registeredByLayoutTime).toBe(1);
 });

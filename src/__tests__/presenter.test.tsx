@@ -719,3 +719,35 @@ test('logout revives a dismissed inline widget rather than restarting a blank on
   });
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
+
+// --- Re-review, F9 ---
+//
+// `hostIds` was pushed to from the RENDER BODY, so a host that rendered and was
+// thrown away (a `<Suspense>` sibling suspending, an interrupted transition,
+// React 18's StrictMode double render) left its id there forever. That was
+// documented as benign — `open()` succeeds and nothing renders — but `open()`
+// also sets `visible: true` and nothing clears it, so the next host to actually
+// COMMIT popped the Modal with no `open()` call behind it. Counting from the
+// LAYOUT phase instead keeps the same-commit and StrictMode cases above green
+// (every layout effect in a commit runs before any passive effect) while only
+// committed renders ever count.
+//
+// Catches moving the `hostIds` push back into `MentioraHost`'s render body.
+test('a host render that never commits neither satisfies open() nor pops a Modal', async () => {
+  Mentiora.configure(cfg);
+  const gate = new Promise<void>(() => {}); // never settles: the boundary stays in fallback
+  const view = await render(
+    <Suspense fallback={null}>
+      <MentioraHost />
+      <Suspends gate={gate} />
+    </Suspense>,
+  );
+
+  await act(async () => {
+    await expect(Mentiora.open()).rejects.toThrow(/MentioraHost/);
+  });
+
+  // And the host that does commit later must not inherit a `visible` nobody set.
+  await view.rerender(<MentioraHost />);
+  expect(screen.queryByTestId('mentiora-webview')).toBeNull();
+});

@@ -80,7 +80,7 @@
  * component is being torn down" hook to hang it on instead.
  */
 import type React from 'react';
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BackHandler, Linking, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
@@ -671,32 +671,50 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     }, delayMs);
   };
 
-  // Mount arms the initial watchdog directly — no `advanceGeneration` call,
-  // for the same reason 11a's `onShouldStartLoadWithRequest` never calls
-  // `resetLoad()` on mount: a freshly built peer already IS generation 0.
-  // Guarded like `peerRef`/`random` above so it runs exactly once, ever, for
-  // this component instance, however many times React (re-)renders it.
-  const mountWatchdogArmed = useRef(false);
-  if (!mountWatchdogArmed.current) {
-    mountWatchdogArmed.current = true;
-    armWatchdog();
-  }
-
-  // Without this, an unmounted widget's mount-armed watchdog is still live:
-  // `beginFreshLoad` fires `peer.resetLoad()` on a peer nobody reads from
-  // any more, and the eventual `showError` calls `onEvent` on a widget the
-  // host already closed. Empty deps: this is a teardown-only effect, not a
-  // sync-with-props one, and it is the one piece of 11b that has to be an
-  // effect — there is no synchronous "about to unmount" hook to use instead.
+  // Mount arms the initial watchdog — no `advanceGeneration` call, for the same
+  // reason 11a's `onShouldStartLoadWithRequest` never calls `resetLoad()` on
+  // mount: a freshly built peer already IS generation 0.
+  //
+  // From the EFFECT, never the render body (re-review, F7). A `setTimeout` in
+  // render is guarded by a ref that only proves "this hooks list has armed
+  // once" — it says nothing about whether the render ever committed. A render
+  // that is thrown away (a `<Suspense>` sibling suspending on first mount, an
+  // interrupted transition, React 18's StrictMode double render, which rebuilds
+  // the hooks list) leaves a live timer nobody owns: its closure still holds
+  // the real host's `onEvent`, so ~16s later the host is handed
+  // `{type:'error', code:'handshake_timeout'}` for a widget that handshook
+  // fine at t≈0. An effect runs after commit and before any `onLoadEnd`, so the
+  // floor's contract is unchanged — and under StrictMode the cleanup clears and
+  // the re-run re-arms, which is what puts the 8s floor back for the dev
+  // default (the simulated unmount used to remove it for good).
+  //
+  // Guarded on `peer.sessionKey() === null` so an `<Activity>`/Offscreen
+  // re-show, which tears effects down and sets them up again without
+  // re-rendering, does not arm a fresh watchdog over a handshake that already
+  // landed — that page will never post `initialize` again.
+  //
+  // The cleanup also retires the generation (re-review, F8). Clearing the
+  // timers that exist AT THAT MOMENT is not enough: an `initialize` still
+  // awaiting `randomSource.bytes()` (2s), `identity.initial()` (up to 4s) or an
+  // install-id mint rejects afterwards, passes its own `generation.current ===
+  // myGen` check, and re-arms the watchdog on a dead instance — 8s later a
+  // `reload()` into a nulled ref, 8s after that the same spurious
+  // `handshake_timeout` to the host, for a chat the user already closed.
+  // Bumping the counter is what makes every existing generation check retire
+  // the in-flight handler and any timer it would arm.
+  //
   // Clears the refs directly (not via `clearWatchdogTimer`/`clearRecoveryTimer`,
   // which are plain functions rebuilt every render and so would either force
   // this effect to rerun on every render or fail exhaustive-deps) — `useRef`
   // objects are themselves stable, so reading `.current` here needs no
   // dependency at all.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; `peer` and `armWatchdog` read refs that are stable for this instance
   useEffect(() => {
+    if (peer.sessionKey() === null) armWatchdog();
     return () => {
       if (watchdogTimer.current !== null) clearTimeout(watchdogTimer.current);
       if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
+      generation.current += 1;
     };
   }, []);
 
@@ -913,7 +931,14 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     return false;
   }, [peer, dismissed, errorCode]);
 
-  useEffect(() => {
+  // `useLayoutEffect`, not `useEffect` (re-review, F10). `onHardwareBack` closes
+  // over `dismissed`/`errorCode`, and `showError` runs from a timer — a
+  // non-discrete lane whose passive effects flush on the scheduler's NEXT task.
+  // A press landing in that gap ran the previous closure and, if the page still
+  // held the button, forwarded `mentiora/back` to a page sitting under the error
+  // surface instead of closing. A layout effect registers in the same commit as
+  // the state that changed it, so the gap does not exist.
+  useLayoutEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
     // Task 12 (fix round 3): the SAME decision, handed to the Modal's
     // `onRequestClose` too, when one is an ancestor — never a second,
@@ -1014,6 +1039,17 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         style={styles.webview}
         // encodeURIComponent: `embedKey` is customer input and belongs in exactly
         // one path segment.
+        //
+        // `widgetOrigin` and `embedKey` are FIXED for the life of a widget
+        // instance: `key` the component on them to change either. Changing them
+        // in place re-renders with a new `source.uri`, and Android never
+        // dispatches `onShouldStartLoadWithRequest` for the resulting
+        // `setSource` -> `loadUrl()` (`RNCWebViewClient.java` raises it only
+        // from `shouldOverrideUrlLoading`), so no load boundary is crossed
+        // there: the new document's `initialize` takes -32600 and the widget is
+        // blank until the `onLoadEnd`-armed watchdog reloads it 8s later. It
+        // self-heals, and the effect that would close the gap needs a device
+        // check first, so this is documented rather than coded around.
         source={{ uri: `${props.widgetOrigin}/h/rn/${encodeURIComponent(props.embedKey)}` }}
         onMessage={onMessage}
         originWhitelist={ALL_ORIGINS}
