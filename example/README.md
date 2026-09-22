@@ -3,9 +3,10 @@
 The example app is specified separately and is not part of the scaffold.
 
 It will be an Expo app exercising both entry points: a header button calling
-`Mentiora.open()`, and a tab embedding `<MentioraWidget />` directly. An Expo
-example covers the bare React Native path too, because this package ships no
-native module; the reverse is not true.
+`Mentiora.open()`, and a tab embedding `<MentioraWidget />` directly, with
+`<MentioraHost />` mounted once above the navigator — `Mentiora.open()` throws
+without it. An Expo example covers the bare React Native path too, because this
+package ships no native module; the reverse is not true.
 
 Two things land with it rather than before it:
 
