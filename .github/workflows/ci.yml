@@ -47,11 +47,19 @@ jobs:
       # real package is ~120KB, and `files` ships `src` alongside `lib` on
       # purpose (scaffold.md, "package.json": source maps and debugging), so
       # even dropping every .map leaves it at ~101KB.
+      #
+      # BOTH numbers, because npm's `size` is the COMPRESSED tarball length
+      # (external review, m3): a corpus of highly compressible junk moves it
+      # barely at all, while it is what a consumer actually unpacks that the
+      # budget is about. `unpackedSize` is ~640KB today; 800KB is the ceiling.
       - name: tarball size budget
         run: |
-          SIZE=$(npm pack --ignore-scripts --dry-run --json | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8'))[0].size")
-          echo "tarball: $SIZE bytes"
-          [ "$SIZE" -lt 153600 ] || { echo "package exceeds the 150KB budget"; exit 1; }
+          npm pack --ignore-scripts --dry-run --json > /tmp/pack.json
+          SIZE=$(node -pe "require('/tmp/pack.json')[0].size")
+          UNPACKED=$(node -pe "require('/tmp/pack.json')[0].unpackedSize")
+          echo "tarball: $SIZE bytes compressed, $UNPACKED bytes unpacked"
+          [ "$SIZE" -lt 153600 ] || { echo "package exceeds the 150KB compressed budget"; exit 1; }
+          [ "$UNPACKED" -lt 819200 ] || { echo "package exceeds the 800KB unpacked budget"; exit 1; }
 
   # Installs the packed tarball with npm, at the low end of every peer range.
   # bun and npm hoist and resolve differently, so this is what proves a consumer

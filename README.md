@@ -78,7 +78,11 @@ state. There is no signal while the panel is closed in v0: no badge, no push.
 Omit `identity` for anonymous chat. `widgetOrigin` and `embedKey` come from the
 install snippet in Mentiora admin.
 
-The SDK renders no chrome: the page draws its own header and close control.
+In normal operation the SDK renders no chat chrome: the page draws its own
+header and close control. The one surface it owns is the failure screen — if
+the page never loads, never completes the handshake, or the renderer keeps
+dying, the SDK overlays a message with Retry and Dismiss, because a page that
+cannot draw cannot draw a way out either.
 
 ## Peer versions
 

@@ -52,16 +52,20 @@ export type StorageStatus =
 export type ResolvedStorage = { storage: MentioraStorage } & StorageStatus;
 
 /** Tags *why* `defaultLoad` failed, so `resolveStorage`'s catch can tell
- *  "cannot even attempt a require" apart from "attempted, peer not there". */
+ *  "cannot even attempt a require" apart from "attempted, peer not there"
+ *  apart from "attempted, and the peer itself blew up". */
 class StorageLoadFailure extends Error {
   constructor(
-    public readonly kind: 'no-require' | 'peer-absent',
+    public readonly kind: 'no-require' | 'peer-absent' | 'load-threw',
     message: string,
   ) {
     super(message);
     this.name = 'StorageLoadFailure';
   }
 }
+
+/** For classifying a load failure, NOT for the `require` call itself. */
+const ASYNC_STORAGE = '@react-native-async-storage/async-storage';
 
 /**
  * `hasRequire` is an injectable seam (mirrors `random.ts`'s `globalCrypto`):
@@ -71,6 +75,14 @@ class StorageLoadFailure extends Error {
  */
 export const defaultLoad = (
   hasRequire: () => boolean = () => typeof require === 'function',
+  // A second seam, for the same reason `loadSafeAreaInsets` has one: how a
+  // failed require is CLASSIFIED (external review, m1) is not reachable
+  // otherwise, because the real peer is installed in this repo and never
+  // throws here. The specifier stays a literal inside the default — Metro
+  // resolves `require` statically, so a computed one is unresolvable at bundle
+  // time.
+  requireModule: () => { default?: MentioraStorage } = () =>
+    require('@react-native-async-storage/async-storage'),
 ): MentioraStorage | null => {
   if (!hasRequire()) {
     throw new StorageLoadFailure(
@@ -80,9 +92,18 @@ export const defaultLoad = (
     );
   }
   try {
-    return require('@react-native-async-storage/async-storage').default;
+    return requireModule().default ?? null;
   } catch (err) {
-    throw new StorageLoadFailure('peer-absent', err instanceof Error ? err.message : String(err));
+    // Only a MODULE_NOT_FOUND naming THIS package means the peer is absent
+    // (external review, m1). Classifying every throw as `peer-absent` told a
+    // customer to install a package they already have whenever async-storage
+    // itself failed to initialise, or was missing a transitive dependency of
+    // its own — and `peer-absent` is what the public `storageUnavailable`
+    // event carries, so the wrong advice reaches the host app, not just a log.
+    const message = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: unknown } | null)?.code;
+    const absent = code === 'MODULE_NOT_FOUND' && message.includes(ASYNC_STORAGE);
+    throw new StorageLoadFailure(absent ? 'peer-absent' : 'load-threw', message);
   }
 };
 

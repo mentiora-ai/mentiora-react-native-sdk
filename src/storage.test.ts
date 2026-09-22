@@ -88,3 +88,64 @@ test('two resolutions do not share one in-memory store', async () => {
     'a module-level Map would leak across embed keys',
   );
 });
+
+// --- External review, m1 ---
+//
+// Every throw out of the peer `require` used to be tagged `peer-absent`, and
+// that reason is what the public `storageUnavailable` event carries: an
+// async-storage that failed to initialise, or that was missing a transitive
+// dependency of its own, told the customer to install a package they already
+// have.
+const moduleNotFound = (message: string): Error =>
+  Object.assign(new Error(message), { code: 'MODULE_NOT_FOUND' });
+
+test('a MODULE_NOT_FOUND naming the peer itself is peer-absent', () => {
+  const r = resolveStorage(undefined, () =>
+    defaultLoad(
+      () => true,
+      () => {
+        throw moduleNotFound("Cannot find module '@react-native-async-storage/async-storage'");
+      },
+    ),
+  );
+  assert.equal(r.ephemeral, true);
+  assert.equal(r.reason, 'peer-absent');
+});
+
+test('a MODULE_NOT_FOUND naming something ELSE is load-threw, not peer-absent', () => {
+  const r = resolveStorage(undefined, () =>
+    defaultLoad(
+      () => true,
+      () => {
+        throw moduleNotFound("Cannot find module 'some-transitive-dep'");
+      },
+    ),
+  );
+  assert.equal(r.reason, 'load-threw', 'the peer IS installed — it just could not load');
+  assert.match(r.detail ?? '', /some-transitive-dep/);
+});
+
+test('an initialisation failure inside the peer is load-threw', () => {
+  const r = resolveStorage(undefined, () =>
+    defaultLoad(
+      () => true,
+      () => {
+        throw new Error('NativeModule: AsyncStorage is null');
+      },
+    ),
+  );
+  assert.equal(r.reason, 'load-threw');
+  assert.match(r.detail ?? '', /AsyncStorage is null/);
+});
+
+test('a peer that loads is still used through the seam', () => {
+  const peer = stub();
+  const r = resolveStorage(undefined, () =>
+    defaultLoad(
+      () => true,
+      () => ({ default: peer }),
+    ),
+  );
+  assert.equal(r.storage, peer);
+  assert.equal(r.reason, 'peer-loaded');
+});
