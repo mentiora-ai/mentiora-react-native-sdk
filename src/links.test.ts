@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isAllowedExternal, isSameOrigin, originOf, schemeOf } from './links.js';
+import { isAllowedExternal, isSameDocument, isSameOrigin, originOf, schemeOf } from './links.js';
 
 test('allows exactly https, mailto and tel', () => {
   assert.equal(isAllowedExternal('https://example.com/a'), true);
@@ -177,4 +177,17 @@ test('single-slash and triple-slash forms are not treated as authority-bearing',
     isSameOrigin('https:///widget.acme.mentiora.ai', 'https://widget.acme.mentiora.ai'),
     false,
   );
+});
+
+// External review, M1: a fragment jump is the same document, and treating it
+// as a load boundary drops a live session key (MentioraWidget's
+// `onShouldStartLoadWithRequest`).
+test('isSameDocument ignores the fragment and nothing else', () => {
+  const base = 'https://w.x.ai/h/rn/k';
+  assert.equal(isSameDocument(base, `${base}#thread-2`), true);
+  assert.equal(isSameDocument(`${base}#a`, `${base}#b`), true);
+  assert.equal(isSameDocument(base, base), true);
+  assert.equal(isSameDocument(base, `${base}?thread=2`), false);
+  assert.equal(isSameDocument(base, `${base}/other`), false);
+  assert.equal(isSameDocument(base, 'https://w.x.ai/h/rn/other'), false);
 });

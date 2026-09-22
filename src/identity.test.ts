@@ -394,3 +394,22 @@ test('an uninterrupted mint still caches and still writes the marker', async () 
   await p.refresh();
   assert.equal(calls, 1, 'the cache still works when no logout intervened');
 });
+
+// --- External review, M2 ---
+//
+// `initial()` returned anonymous on `!identity` BEFORE reading the marker, so a
+// signed-in install restarting while identity is not (yet) configured was
+// silently demoted to a fresh anonymous user and its threads orphaned — the
+// exact failure the marker exists to prevent (§2.3).
+test('a signed-in install with no identity configured fails the handshake', async () => {
+  const { m, storage } = memory();
+  m.set(wasSignedInKey('k'), '1');
+  const p = createIdentityProvider({ embedKey: 'k', storage });
+  await assert.rejects(p.initial(), IdentityUnavailable);
+});
+
+test('an install that was never signed in still boots anonymous with no identity', async () => {
+  const { storage } = memory();
+  const p = createIdentityProvider({ embedKey: 'k', storage });
+  assert.equal(await p.initial(), undefined);
+});

@@ -62,6 +62,20 @@ export const originOf = (url: string): string | null => {
   return `${scheme}://${host}`;
 };
 
+/** Same document, i.e. the two URLs differ at most in their fragment.
+ *
+ *  `/chat` -> `/chat#thread` is not a load boundary: the document and its
+ *  sandbox iframe are still alive, so treating it as one drops a valid session
+ *  key and reopens the keyless `initialize` latch, after which every page call
+ *  takes -32001 and the watchdog reloads a healthy page (external review, M1;
+ *  design.md:184-190 warns about the same class for Android's `onLoadStart`).
+ *
+ *  Raw string comparison, deliberately: `clean()` would let two genuinely
+ *  different URLs compare equal, and here an over-eager "same document" is the
+ *  dangerous direction. */
+export const isSameDocument = (a: string, b: string): boolean =>
+  a.split('#')[0] === b.split('#')[0];
+
 export const isSameOrigin = (url: string, widgetOrigin: string): boolean => {
   const a = originOf(url);
   const b = originOf(widgetOrigin);

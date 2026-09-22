@@ -4,7 +4,9 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -44,9 +46,43 @@ test('rejects a prerelease flag that disagrees with the version', () => {
   );
 });
 
+// This test used to assert that the CURRENT CHANGELOG contains the CURRENT
+// heading, and never ran the guard at all: deleting the changelog check from
+// assert-version.mjs left it green (external review, M6). The guard resolves
+// everything it reads from its own location, so a throwaway tree with a copy of
+// it is enough to exercise the real code path.
+const guardTree = (changelog) => {
+  const root = mkdtempSync(join(tmpdir(), 'release-guard-'));
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  copyFileSync(guard, join(root, 'scripts', 'assert-version.mjs'));
+  copyFileSync(new URL('../package.json', import.meta.url).pathname, join(root, 'package.json'));
+  copyFileSync(
+    new URL('../src/version.ts', import.meta.url).pathname,
+    join(root, 'src/version.ts'),
+  );
+  writeFileSync(join(root, 'CHANGELOG.md'), changelog);
+  return join(root, 'scripts', 'assert-version.mjs');
+};
+
+const runIn = (tree, tag) =>
+  execFileSync(process.execPath, [tree, tag], { encoding: 'utf8', stdio: 'pipe' });
+
 test('rejects a version with no CHANGELOG.md section', () => {
-  const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
-  assert.match(changelog, new RegExp(`^## ${pkg.version}$`, 'm'));
+  const tree = guardTree(`# Changelog\n\n## 0.0.1-other\n\n- something else\n`);
+  assert.throws(() => runIn(tree, `v${pkg.version}`), new RegExp(`no "## ${pkg.version}" section`));
+});
+
+test('accepts the same tree once the section is there', () => {
+  const tree = guardTree(`# Changelog\n\n## ${pkg.version}\n\n- initial release\n`);
+  assert.match(runIn(tree, `v${pkg.version}`), /matches package.json/);
+});
+
+test("the real CHANGELOG.md has this version's section", () => {
+  assert.match(
+    readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8'),
+    new RegExp(`^## ${pkg.version}$`, 'm'),
+  );
 });
 
 test('src/version.ts is in sync with package.json', () => {

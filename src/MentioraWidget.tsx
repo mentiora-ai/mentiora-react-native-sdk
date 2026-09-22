@@ -87,7 +87,7 @@ import { WebView } from 'react-native-webview';
 import { BackChannelContext } from './back-channel.js';
 import { BridgeError, createHostPeer, type HostPeer } from './bridge/peer.js';
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
-import { isAllowedExternal, isSameOrigin } from './links.js';
+import { isAllowedExternal, isSameDocument, isSameOrigin } from './links.js';
 import { createRandomSource, type RandomDeps, type RandomSource, toBase64Url } from './random.js';
 import { delaysFor, type RetryPolicy } from './retry.js';
 import { getRuntime, type MentioraRuntime } from './runtime.js';
@@ -352,6 +352,12 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // live, since a reload/remount resets it synchronously and this ref alone
   // does not.
   const backHeld = useRef(false);
+
+  /** The top-frame URL this WebView last committed to, so a fragment-only
+   *  navigation can be told apart from a real one (external review, M1). A
+   *  ref, not state: it is read and written inside a navigation callback and
+   *  must never schedule a render. */
+  const lastTopUrl = useRef<string | null>(null);
 
   // Task 12 (fix round 3): non-null only when a `<MentioraHost />`'s Modal is
   // an ancestor — `back-channel.ts`'s own header has the full reasoning. An
@@ -953,7 +959,20 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       // is the same document and must not reset anything either (§2.2). A
       // top-frame nav is a fresh top-level load exactly like mount, so it
       // gets its own fresh handshake watchdog too (11b).
-      if (isTopFrame) beginFreshLoad();
+      //
+      // Unless the document did not actually change: `/chat` -> `/chat#thread`
+      // raises this callback with `isTopFrame: true` on both platforms, and
+      // treating a fragment jump as a boundary drops a live session key and
+      // reopens the keyless `initialize` latch while the page and its iframe
+      // are still running — every later page call then takes -32001 and the
+      // watchdog reloads a healthy page (external review, M1). The FIRST
+      // top-frame request has nothing to compare against and is always a
+      // boundary, exactly as before.
+      if (isTopFrame) {
+        const previous = lastTopUrl.current;
+        lastTopUrl.current = url;
+        if (previous === null || !isSameDocument(previous, url)) beginFreshLoad();
+      }
       return true;
     }
     // Denied here, handed to the OS. The navigation is already blocked, and a

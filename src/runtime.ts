@@ -183,13 +183,23 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       // rejection must reach the caller rather than being swallowed — a
       // swallowed failure here would leave the flag set on a now-anonymous
       // install, which is a boot deadlock per identity.ts's `initial()`.
-      await clearing.clear();
-      // A provider swapped in mid-logout (`getRuntime`, last-config-wins) is
-      // inside this logout too: it may already have been asked for a token by
-      // a widget that reads `runtime.identity` live.
-      const live = runtime.identity;
-      if (live !== clearing) await live.clear();
-      for (const fn of subscribers) fn();
+      //
+      // Subscribers are notified on the way out WHATEVER happens (external
+      // review, M3). The rotation has already landed by this point, so a
+      // `clear()` that rejects used to skip every reload: the mounted WebView
+      // kept running with its pre-logout token while storage had no install id
+      // at all. The rejection still reaches the caller — `finally` re-raises —
+      // it just no longer takes the reload with it.
+      try {
+        await clearing.clear();
+        // A provider swapped in mid-logout (`getRuntime`, last-config-wins) is
+        // inside this logout too: it may already have been asked for a token by
+        // a widget that reads `runtime.identity` live.
+        const live = runtime.identity;
+        if (live !== clearing) await live.clear();
+      } finally {
+        for (const fn of subscribers) fn();
+      }
     },
   };
 

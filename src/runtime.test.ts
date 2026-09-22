@@ -486,3 +486,31 @@ test('a provider swapped in mid-logout is inside the logout, and so is the old o
   assert.equal(firstCleared, 1, 'the provider that was live when logout began');
   assert.equal(secondCleared, 1, 'and the one swapped in while it ran');
 });
+
+// --- External review, M3 ---
+//
+// The rotation has already happened by the time `clear()` runs, so a `clear()`
+// that rejected used to skip every reload subscriber: the mounted WebView kept
+// running with its pre-logout token while storage had no install id at all.
+test('a rejecting clear() still reloads every subscriber, and still rejects', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      if (k.includes('wasSignedIn')) throw new Error('flag removal failed');
+      store.delete(k);
+    },
+  };
+  const rt = getRuntime({ ...cfg('m3'), storage });
+  let reloads = 0;
+  rt.onReload(() => {
+    reloads++;
+  });
+
+  await assert.rejects(rt.logout(), /flag removal failed/);
+  assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout token');
+});

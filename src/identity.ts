@@ -238,7 +238,22 @@ export const createIdentityProvider = (deps: {
   };
 
   const initial = async (): Promise<string | undefined> => {
-    if (!identity) return undefined;
+    if (!identity) {
+      // The marker is read BEFORE the anonymous shortcut (external review,
+      // M2). An install that has held a token and restarts before identity is
+      // configured — a customer that fetches its own JWT and hands it over a
+      // render or two later, an app that boots the widget from a cold start
+      // before its auth layer is ready — would otherwise be demoted to a fresh
+      // anonymous user and have its threads orphaned, which is the exact
+      // failure this marker exists to prevent (§2.3).
+      const wasSignedIn = await storage.getItem(wasSignedInKey(embedKey));
+      if (wasSignedIn) {
+        throw new IdentityUnavailable(
+          'this install was signed in before, but no identity is configured',
+        );
+      }
+      return undefined;
+    }
 
     if (isFetcherShape(identity) && isFresh(REFRESH_BEFORE_EXPIRY_MS) && cache) {
       return cache.token;

@@ -270,6 +270,13 @@ test('a same-origin sub-frame navigation does NOT clear the session key', async 
 
 test('an allowed top-frame navigation is a load boundary and resets the session', async () => {
   const el = await mount();
+  // The document itself commits first, so what the navigation below proves is
+  // "a DIFFERENT document resets", not merely "the first top-frame request
+  // resets" (external review, M1).
+  await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}`,
+    isTopFrame: true,
+  });
   await initialize(el);
   await waitForSent(1);
   const key = (sent().at(-1) as { result: { sessionKey: string } }).result.sessionKey;
@@ -289,6 +296,62 @@ test('an allowed top-frame navigation is a load boundary and resets the session'
   });
   await waitForSent(2);
   expect(sent().at(-1)).toMatchObject({ error: { code: -32001 } });
+});
+
+// External review, M1. Every same-origin top-frame request used to call
+// `beginFreshLoad`, with no check that the document had actually changed. A
+// `/chat` -> `/chat#thread` jump therefore dropped a live session key and
+// reopened the keyless `initialize` latch while the page and its sandbox
+// iframe were still running: every later page call took -32001 and the
+// watchdog reloaded a perfectly healthy page. design.md:184-190 already warns
+// about this class for Android's `onLoadStart`.
+test('a fragment-only navigation is not a load boundary', async () => {
+  const el = await mount();
+  await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}`,
+    isTopFrame: true,
+  });
+  await initialize(el);
+  await waitForSent(1);
+  const key = (sent().at(-1) as { result: { sessionKey: string } }).result.sessionKey;
+
+  const allowed = await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}#thread-2`,
+    isTopFrame: true,
+  });
+  expect(allowed).toBe(true);
+
+  await fireEvent(el, 'message', {
+    nativeEvent: {
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'u1',
+        method: 'mentiora/openUrl',
+        params: { sessionKey: key, url: 'https://ok.example/x' },
+      }),
+    },
+  });
+  await waitForSent(2);
+  // The positive result, not `not.toMatchObject({error:{code:-32001}})`, which
+  // would also pass on -32602 or -32603.
+  expect(sent().at(-1)).toMatchObject({ id: 'u1', result: null });
+});
+
+test('a fragment jump does NOT reopen the keyless initialize latch', async () => {
+  const el = await mount();
+  await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}`,
+    isTopFrame: true,
+  });
+  await initialize(el);
+  await waitForSent(1);
+  await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}#thread-2`,
+    isTopFrame: true,
+  });
+  await initialize(el); // the same document asking twice
+  await waitForSent(2);
+  expect(sent().at(-1)).toMatchObject({ error: { code: -32600 } });
 });
 
 test('a bare onLoadStart is NOT wired — Android fires it on in-page history changes', async () => {
