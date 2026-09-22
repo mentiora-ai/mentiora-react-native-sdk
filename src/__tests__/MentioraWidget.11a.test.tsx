@@ -354,6 +354,46 @@ test('a fragment jump does NOT reopen the keyless initialize latch', async () =>
   expect(sent().at(-1)).toMatchObject({ error: { code: -32600 } });
 });
 
+// Re-review, F1. `isSameDocument` split on '#' and compared, so a same-URL
+// navigation and a fragment REMOVAL both read as "same document". Both are full
+// document navigations per the HTML navigate algorithm, and reading either as a
+// fragment jump leaves the new document's `initialize` answered -32600 — a blank
+// widget until the 8s watchdog reloads it, with the one-reload budget spent.
+// The third row isolates the `navigationType` check on its own: the two URLs
+// are fragment-identical, so nothing about the URL comparison can catch it.
+test.each([
+  ['a same-URL navigation (location.reload / a link to the current path)', '', '', undefined],
+  ['a fragment removal (#t -> the bare path)', '#t', '', undefined],
+  ["iOS's reload navigationType over an unchanged fragment URL", '#t', '#t', 'reload'],
+] as const)('%s is a load boundary', async (_label, firstSuffix, secondSuffix, navigationType) => {
+  const el = await mount();
+  await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}${firstSuffix}`,
+    isTopFrame: true,
+  });
+  await initialize(el);
+  await waitForSent(1);
+  const key = (sent().at(-1) as { result: { sessionKey: string } }).result.sessionKey;
+
+  await fireEvent(el, 'shouldStartLoadWithRequest', {
+    url: `${ORIGIN}/h/rn/${KEY}${secondSuffix}`,
+    isTopFrame: true,
+    ...(navigationType ? { navigationType } : {}),
+  });
+  await fireEvent(el, 'message', {
+    nativeEvent: {
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'u1',
+        method: 'mentiora/openUrl',
+        params: { sessionKey: key, url: 'https://ok.example/x' },
+      }),
+    },
+  });
+  await waitForSent(2);
+  expect(sent().at(-1)).toMatchObject({ error: { code: -32001 } });
+});
+
 test('a bare onLoadStart is NOT wired — Android fires it on in-page history changes', async () => {
   const el = await mount();
   expect(el.props.onLoadStart).toBeUndefined();

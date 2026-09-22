@@ -13,7 +13,7 @@
  * This module owns none of the per-load state. If it grows a peer, a session
  * key or a WebView reference, that's Task 11a's job leaking in here.
  */
-import { createIdentityProvider, type IdentityProvider } from './identity.js';
+import { createIdentityProvider, type IdentityProvider, type LogoutEpoch } from './identity.js';
 import { loadOrCreateInstallId, rotateInstallId } from './install-id.js';
 import { resolveStorage, type StorageStatus } from './storage.js';
 import type { MentioraConfig, MentioraIdentity, MentioraStorage } from './types.js';
@@ -46,6 +46,14 @@ type RuntimeEntry = {
   embedKey: string;
   /** The `config.identity` reference the live provider was built from. */
   identityRef: MentioraIdentity | undefined;
+  /** One logout epoch for every provider this entry ever owns (re-review, F3).
+   *  `logout()` can only `clear()` the provider live at its start and the one
+   *  live at its end; a provider `getRuntime` discarded BEFORE the logout is
+   *  unreachable from here, yet its mint may still be parked in `fetch`. A
+   *  shared epoch is what makes that mint see the logout anyway, instead of
+   *  resuming and writing the `wasSignedIn` marker onto a logged-out install —
+   *  which deadlocks every later boot on `IdentityUnavailable`. */
+  epoch: LogoutEpoch;
 };
 
 const runtimes = new Map<string, RuntimeEntry>();
@@ -57,6 +65,7 @@ export const __resetRuntimes = (): void => {
 
 const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   const { embedKey } = config;
+  const epoch: LogoutEpoch = { n: 0 };
   const resolved = resolveStorage(config.storage);
   const { storage } = resolved;
 
@@ -89,12 +98,21 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   const installId = (randomBytes: RandomBytes): Promise<string> => {
     if (!inFlight) {
       const pendingRotation = rotation;
-      inFlight = (async () => {
+      // `if (inFlight === p)`, never an unconditional null (re-review, F2).
+      // `logout()` drops the memo itself and the PRIOR mint can settle long
+      // afterwards — by which time a post-logout caller has already installed a
+      // NEW memo. An unconditional `inFlight = undefined` in the old promise's
+      // `finally` erased that newer one, so the next two callers each read
+      // storage past the rotation and each minted: two surfaces on two
+      // different anonymous users, which is the exact outcome the rotation wait
+      // above exists to prevent.
+      const p: Promise<string> = (async () => {
         await pendingRotation;
         return await loadOrCreateInstallId({ storage, embedKey, randomBytes });
       })().finally(() => {
-        inFlight = undefined;
+        if (inFlight === p) inFlight = undefined;
       });
+      inFlight = p;
     }
     return inFlight;
   };
@@ -114,7 +132,7 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   // `configure()` wins") without `logout` ever clearing the wrong one.
   const runtime: MentioraRuntime = {
     installId,
-    identity: createIdentityProvider({ identity: config.identity, embedKey, storage }),
+    identity: createIdentityProvider({ identity: config.identity, embedKey, storage, epoch }),
     // Rebuilt per branch rather than field by field: a single object literal
     // over the union would widen `ephemeral` to `boolean` and `reason` to the
     // internal `StorageReason`, losing exactly the correlation the type exists
@@ -172,8 +190,17 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       // because releasing the slot on the failing path is what keeps the
       // `.catch` from being load-bearing on its own.
       rotation = rotating.catch(() => undefined);
+      // Collected, not thrown (re-review, F6). A `removeItem` rejection used to
+      // propagate straight out of here, skipping the identity clear AND every
+      // reload subscriber: the token and the live session both survived a
+      // logout that had already dropped the install id. M3 fixed exactly this
+      // shape for `clear()`; the rotation half had it too. The first error
+      // still reaches the caller, at the very end.
+      const errors: unknown[] = [];
       try {
         await rotating;
+      } catch (err) {
+        errors.push(err);
       } finally {
         rotation = undefined;
       }
@@ -197,13 +224,16 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
         // a widget that reads `runtime.identity` live.
         const live = runtime.identity;
         if (live !== clearing) await live.clear();
+      } catch (err) {
+        errors.push(err);
       } finally {
         for (const fn of subscribers) fn();
       }
+      if (errors.length > 0) throw errors[0];
     },
   };
 
-  return { runtime, storage, embedKey, identityRef: config.identity };
+  return { runtime, storage, embedKey, identityRef: config.identity, epoch };
 };
 
 /** One runtime per `embedKey`. The map is keyed on `embedKey` alone — two
@@ -239,6 +269,10 @@ export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
         identity: config.identity,
         embedKey: existing.embedKey,
         storage: existing.storage,
+        // The entry's epoch, never a fresh one: the provider being discarded
+        // here may have a mint in flight, and it has to stay inside any later
+        // logout (re-review, F3).
+        epoch: existing.epoch,
       });
       existing.identityRef = config.identity;
     }

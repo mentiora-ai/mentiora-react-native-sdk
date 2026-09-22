@@ -413,3 +413,130 @@ test('an install that was never signed in still boots anonymous with no identity
   const p = createIdentityProvider({ embedKey: 'k', storage });
   assert.equal(await p.initial(), undefined);
 });
+
+// --- Re-review, F4 ---
+//
+// The B2 test above passes with the post-`retry` `cleared()` check deleted: its
+// assertions are all satisfied by the two LATER checks. But that check is the
+// only thing keeping `cache` from holding a pre-logout token during the
+// `await storage.setItem` window, and a concurrent `refresh()` on a fetcher-
+// shape provider takes the `isFresh` shortcut straight into it — handing the
+// logged-out user's token to the next one.
+test('a mint resuming after clear() never publishes its token, not even transiently', async () => {
+  const now = 1_000_000_000_000;
+  const tokenA = jwt(now / 1000 + 3600);
+  const tokenB = jwt(now / 1000 + 3601);
+  const { storage } = memory();
+
+  let releaseFetch!: () => void;
+  const fetched = new Promise<void>((r) => {
+    releaseFetch = r;
+  });
+  let releaseWrite!: () => void;
+  const written = new Promise<void>((r) => {
+    releaseWrite = r;
+  });
+  let firstWrite = true;
+  const slowWrite: MentioraStorage = {
+    ...storage,
+    setItem: async (k, v) => {
+      if (firstWrite) {
+        firstWrite = false;
+        await written; // whichever mint gets here first parks, holding the window open
+      }
+      await storage.setItem(k, v);
+    },
+  };
+
+  let hits = 0;
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage: slowWrite,
+    identity: { endpoint: 'https://x/y' },
+    now: () => now,
+    fetchImpl: (async () => {
+      const mine = ++hits;
+      if (mine === 1) await fetched;
+      return {
+        ok: true,
+        json: async () => ({ token: mine === 1 ? tokenA : tokenB }),
+      } as unknown as Response;
+    }) as typeof fetch,
+  });
+
+  const inFlight = p.refresh(); // parked inside fetchImpl
+  inFlight.catch(() => undefined);
+  await new Promise((r) => setImmediate(r));
+  await p.clear(); // the user logs out while it is parked
+  releaseFetch();
+  await new Promise((r) => setImmediate(r));
+
+  const second = p.refresh();
+  second.catch(() => undefined);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(hits, 2, 'the pre-logout token must never be reachable through the cache');
+
+  releaseWrite();
+  assert.equal(await second, tokenB);
+  await assert.rejects(inFlight, IdentityUnavailable);
+});
+
+// --- Re-review, F5 ---
+//
+// A stale mint's undo was unscoped: it removed whatever marker was in storage
+// and wiped whatever token was cached, even when both belonged to a NEWER mint
+// that had already completed. The outcome is a signed-in install with no
+// marker, which a later boot failure demotes to anonymous — the §2.3 failure.
+test("a stale mint's undo cannot erase a newer mint's marker or cache", async () => {
+  const now = 1_000_000_000_000;
+  const tokenA = jwt(now / 1000 + 3600);
+  const tokenB = jwt(now / 1000 + 3601);
+  const { m, storage } = memory();
+
+  let releaseWrite!: () => void;
+  const written = new Promise<void>((r) => {
+    releaseWrite = r;
+  });
+  let firstWrite = true;
+  const slowFirstWrite: MentioraStorage = {
+    ...storage,
+    setItem: async (k, v) => {
+      if (firstWrite) {
+        firstWrite = false;
+        await written;
+      }
+      await storage.setItem(k, v);
+    },
+  };
+
+  let hits = 0;
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage: slowFirstWrite,
+    identity: { endpoint: 'https://x/y' },
+    now: () => now,
+    fetchImpl: (async () => {
+      const mine = ++hits;
+      return {
+        ok: true,
+        json: async () => ({ token: mine === 1 ? tokenA : tokenB }),
+      } as unknown as Response;
+    }) as typeof fetch,
+  });
+
+  const stale = p.refresh(); // reaches setItem and parks there
+  stale.catch(() => undefined);
+  await new Promise((r) => setImmediate(r));
+
+  await p.clear(); // logout
+  await p.refresh(); // the user signs back in; this mint completes in full
+  assert.equal(m.get(wasSignedInKey('k')), '1', 'precondition: the new mint marked the install');
+
+  releaseWrite(); // the pre-logout mint finally resumes
+  await assert.rejects(stale, IdentityUnavailable);
+
+  assert.equal(m.get(wasSignedInKey('k')), '1', "the newer mint's marker must survive");
+  const before = hits;
+  await p.refresh();
+  assert.equal(hits, before, "the newer mint's cache must survive too");
+});

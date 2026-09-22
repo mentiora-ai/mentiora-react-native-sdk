@@ -948,7 +948,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // render anyway (it closes over refs, not state, so identity doesn't matter
   // — same reasoning as `onError`/`onRenderProcessGone` below).
   const onShouldStartLoadWithRequest = (request: NavigationRequest): boolean => {
-    const { url, isTopFrame } = request;
+    const { url, isTopFrame, navigationType } = request;
     if (isSameOrigin(url, latest.current.props.widgetOrigin)) {
       // A load boundary is an identifiable one: initial mount (a freshly built
       // peer already IS generation 0 with no session key) and an allowed
@@ -968,10 +968,18 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       // watchdog reloads a healthy page (external review, M1). The FIRST
       // top-frame request has nothing to compare against and is always a
       // boundary, exactly as before.
+      //
+      // A `reload` is a boundary whatever the URLs say (re-review, F1): iOS
+      // surfaces `navigationType: 'reload'` for `location.reload()` and for the
+      // library's own `reload()`, and the URL is identical by definition, so
+      // the comparison below cannot see it. Android reports `'other'` for
+      // everything and never raises this callback for a reload at all, so this
+      // is a no-op there.
       if (isTopFrame) {
         const previous = lastTopUrl.current;
         lastTopUrl.current = url;
-        if (previous === null || !isSameDocument(previous, url)) beginFreshLoad();
+        if (previous === null || navigationType === 'reload' || !isSameDocument(previous, url))
+          beginFreshLoad();
       }
       return true;
     }

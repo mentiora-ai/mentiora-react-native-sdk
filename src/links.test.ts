@@ -186,8 +186,17 @@ test('isSameDocument ignores the fragment and nothing else', () => {
   const base = 'https://w.x.ai/h/rn/k';
   assert.equal(isSameDocument(base, `${base}#thread-2`), true);
   assert.equal(isSameDocument(`${base}#a`, `${base}#b`), true);
-  assert.equal(isSameDocument(base, base), true);
+  assert.equal(isSameDocument(base, `${base}#`), true, 'an empty fragment is still non-null');
   assert.equal(isSameDocument(base, `${base}?thread=2`), false);
   assert.equal(isSameDocument(base, `${base}/other`), false);
   assert.equal(isSameDocument(base, 'https://w.x.ai/h/rn/other'), false);
+});
+
+// Re-review, F1. Both of these used to report "same document", so a genuinely
+// new document could not initialize for 8s. Per the HTML navigate algorithm a
+// navigation is fragment-only only when the TARGET carries a fragment.
+test('a same-URL reload and a fragment removal are both new documents', () => {
+  const base = 'https://w.x.ai/h/rn/k';
+  assert.equal(isSameDocument(base, base), false, 'location.reload() is a full navigation');
+  assert.equal(isSameDocument(`${base}#a`, base), false, 'dropping the fragment reloads');
 });

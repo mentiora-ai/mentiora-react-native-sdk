@@ -514,3 +514,139 @@ test('a rejecting clear() still reloads every subscriber, and still rejects', as
   await assert.rejects(rt.logout(), /flag removal failed/);
   assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout token');
 });
+
+// --- Re-review, F2 ---
+//
+// The memo's `.finally` nulled `inFlight` unconditionally, so a PRIOR mint
+// settling after `logout()` erased the memo a post-logout caller had already
+// installed. The next caller then found no memo, read storage past the
+// rotation and minted a second id: two surfaces on two different anonymous
+// users — the exact outcome B3's rotation wait exists to prevent, reached
+// through the line above it.
+test('a prior mint settling after logout does not erase the post-logout memo', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  let releaseWrite!: () => void;
+  let releaseRotate!: () => void;
+  const written = new Promise<void>((r) => {
+    releaseWrite = r;
+  });
+  const rotated = new Promise<void>((r) => {
+    releaseRotate = r;
+  });
+  let firstWrite = true;
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      if (firstWrite) {
+        firstWrite = false;
+        await written; // the pre-logout mint parks here
+      }
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      if (k.includes('installId')) await rotated; // the rotation parks here
+      store.delete(k);
+    },
+  };
+
+  const rt = getRuntime({ ...cfg('f2'), storage });
+  const prior = rt.installId(bytes); // parked inside setItem
+  const loggingOut = rt.logout(); // drops the memo, parks new mints on the rotation
+  const postLogout = rt.installId(bytes); // the NEW memo, parked on the rotation
+
+  releaseWrite();
+  await prior; // its `.finally` runs here, with the rotation still in flight
+
+  assert.equal(
+    rt.installId(bytes),
+    postLogout,
+    'the settling prior mint must not drop a newer memo',
+  );
+
+  releaseRotate();
+  await loggingOut;
+  assert.equal(await rt.installId(bytes), await postLogout, 'one post-logout id, not two');
+});
+
+// --- Re-review, F3 ---
+//
+// The logout generation used to be a closure local of each provider, so a
+// provider `getRuntime` discarded on an identity swap — which an inline
+// `identity={{ getToken }}` literal triggers on every render, by this module's
+// own reference-equality contract — never saw the logout at all. Its parked
+// mint resumed afterwards and wrote the `wasSignedIn` marker onto a logged-out
+// install, after which `initial()` throws `IdentityUnavailable` on every boot
+// and the user is stuck on a `handshake_timeout` screen permanently.
+test('a provider discarded by an identity swap is still inside a later logout', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      store.delete(k);
+    },
+  };
+  let release!: (token: string) => void;
+  const rt = getRuntime({
+    ...cfg('f3'),
+    storage,
+    identity: {
+      getToken: () =>
+        new Promise<string>((res) => {
+          release = res;
+        }),
+    },
+  });
+  const booting = rt.identity.initial(); // parked inside getToken on the FIRST provider
+
+  // A re-render passing a fresh object literal: `getRuntime` swaps the provider
+  // in place and the one above becomes unreachable — with its mint still live.
+  getRuntime({ ...cfg('f3'), storage, identity: { getToken: () => 'second' } });
+
+  await rt.logout();
+  release('first'); // the discarded provider's mint resumes, post-logout
+  await booting;
+
+  assert.equal(
+    store.get(wasSignedInKey('f3')),
+    undefined,
+    'a discarded provider must not mark a logged-out install as signed in',
+  );
+});
+
+// --- Re-review, F6 ---
+//
+// M3 made a rejecting `clear()` still notify the reload subscribers. The
+// rotation half had the same shape and was missed: an `installId` `removeItem`
+// rejection propagated straight out, so the identity cache, the `wasSignedIn`
+// marker and every mounted WebView's session all survived the logout.
+test('a rejecting rotation still clears identity, still reloads, and still rejects', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      if (k.includes('installId')) throw new Error('install id removal failed');
+      store.delete(k);
+    },
+  };
+  const rt = getRuntime({ ...cfg('f6'), storage, identity: { getToken: () => 'tok' } });
+  await rt.identity.initial(); // sets the wasSignedIn marker
+  assert.equal(store.get(wasSignedInKey('f6')), '1', 'precondition');
+
+  let reloads = 0;
+  rt.onReload(() => {
+    reloads++;
+  });
+
+  await assert.rejects(rt.logout(), /install id removal failed/);
+  assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout session');
+  assert.equal(store.get(wasSignedInKey('f6')), undefined, 'identity must be cleared anyway');
+});

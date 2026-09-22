@@ -62,7 +62,7 @@ export const originOf = (url: string): string | null => {
   return `${scheme}://${host}`;
 };
 
-/** Same document, i.e. the two URLs differ at most in their fragment.
+/** Same document, i.e. `b` is `a` with only its fragment changed.
  *
  *  `/chat` -> `/chat#thread` is not a load boundary: the document and its
  *  sandbox iframe are still alive, so treating it as one drops a valid session
@@ -70,11 +70,19 @@ export const originOf = (url: string): string | null => {
  *  takes -32001 and the watchdog reloads a healthy page (external review, M1;
  *  design.md:184-190 warns about the same class for Android's `onLoadStart`).
  *
+ *  The TARGET must actually carry a fragment (re-review, F1). The HTML navigate
+ *  algorithm is fragment-only iff the destination's fragment is non-null and the
+ *  two URLs are otherwise equal, so `/chat` -> `/chat` (a reload, or a link back
+ *  to the current path) and `/chat#t` -> `/chat` (fragment removal) are BOTH full
+ *  document navigations. Reading either as "same document" leaves the new
+ *  document's `initialize` answered -32600 and the widget blank for 8s until the
+ *  watchdog reloads it. `#` alone counts: an empty fragment is still non-null.
+ *
  *  Raw string comparison, deliberately: `clean()` would let two genuinely
  *  different URLs compare equal, and here an over-eager "same document" is the
  *  dangerous direction. */
 export const isSameDocument = (a: string, b: string): boolean =>
-  a.split('#')[0] === b.split('#')[0];
+  b.includes('#') && a.split('#')[0] === b.split('#')[0];
 
 export const isSameOrigin = (url: string, widgetOrigin: string): boolean => {
   const a = originOf(url);

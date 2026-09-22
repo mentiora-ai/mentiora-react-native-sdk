@@ -24,6 +24,16 @@
 import { type RetryPolicy, retry } from './retry.js';
 import type { MentioraIdentity, MentioraStorage } from './types.js';
 
+/** The logout epoch, shared by every provider a runtime entry ever owns
+ *  (re-review, F3). A mutable box rather than a number because `getRuntime`
+ *  swaps `runtime.identity` in place on any new `identity` reference — which
+ *  an inline `identity={{ … }}` literal produces on every render — and a
+ *  provider discarded that way can still have a mint parked in `fetch`. With a
+ *  per-provider counter that discarded provider never sees the logout at all:
+ *  it resumes, writes the `wasSignedIn` marker onto a logged-out install, and
+ *  every later boot throws `IdentityUnavailable` forever. */
+export type LogoutEpoch = { n: number };
+
 export type IdentityProvider = {
   /**
    * Boot: the token to put in InitializeResult, or undefined for anonymous.
@@ -159,6 +169,8 @@ export const createIdentityProvider = (deps: {
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   warn?: (m: string) => void;
+  /** Owned by the runtime entry, not by this provider — see `LogoutEpoch`. */
+  epoch?: LogoutEpoch;
 }): IdentityProvider => {
   const { identity, embedKey, storage, warn } = deps;
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -177,7 +189,20 @@ export const createIdentityProvider = (deps: {
   // it before each write and before returning; a mismatch means the token it
   // is holding belongs to a user who has since logged out, and it is dropped
   // rather than published.
-  let generation = 0;
+  //
+  // SHARED with every other provider on this embed key (re-review, F3) — it is
+  // the runtime entry's, not this closure's. A default is kept so a provider
+  // built outside a runtime (every identity test) still has one of its own.
+  const epoch = deps.epoch ?? { n: 0 };
+
+  // Which epoch owns the `wasSignedIn` marker currently in storage, so a stale
+  // mint only ever undoes ITS OWN write (re-review, F5). Mint A (epoch 0) parks
+  // in `setItem`; the user logs out and signs back in; mint B (epoch 1)
+  // completes; A then resumes and, with an unscoped undo, removes B's marker —
+  // leaving a signed-in install unmarked, which demotes it to anonymous on the
+  // next boot failure. Stamped BEFORE the await, not after, so the later write
+  // is always the one that owns the marker.
+  let markerEpoch = -1;
 
   const isFresh = (floorMs: number): boolean =>
     cache !== undefined && now() < cache.expMs - floorMs;
@@ -197,8 +222,8 @@ export const createIdentityProvider = (deps: {
   };
 
   const mintToken = async (policy: RetryPolicy, id: MentioraIdentity): Promise<string> => {
-    const myGen = generation;
-    const cleared = (): boolean => generation !== myGen;
+    const myGen = epoch.n;
+    const cleared = (): boolean => epoch.n !== myGen;
 
     let raw: string;
     try {
@@ -222,15 +247,19 @@ export const createIdentityProvider = (deps: {
       // Re-checked after the await too: `setItem` can resolve after a logout
       // that started while it was pending, and a marker set on a logged-out
       // install is a boot deadlock (`initial()` throws on it forever).
+      markerEpoch = myGen;
       await storage.setItem(wasSignedInKey(embedKey), '1');
-      if (cleared()) await storage.removeItem(wasSignedInKey(embedKey));
+      if (cleared() && markerEpoch === myGen) {
+        await storage.removeItem(wasSignedInKey(embedKey));
+      }
     } catch {
       // A failed flag write must not fail a successful boot/refresh — the
       // caller already has a token. Nothing else in this function swallows.
     }
 
     if (cleared()) {
-      cache = undefined;
+      // Only our own token, never a newer mint's (re-review, F5).
+      if (cache?.token === raw) cache = undefined;
       throw new IdentityUnavailable('identity cleared while the token was in flight');
     }
 
@@ -281,7 +310,7 @@ export const createIdentityProvider = (deps: {
 
   const clear = async (): Promise<void> => {
     // Before any await, so an acquisition that resumes later sees it.
-    generation += 1;
+    epoch.n += 1;
     cache = undefined;
     await storage.removeItem(wasSignedInKey(embedKey));
   };
