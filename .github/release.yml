@@ -1,8 +1,5 @@
-# Categories for GitHub's generated release notes. The generated list is a
-# starting point for the CHANGELOG.md entry, which is the source of truth.
-#
-# "*" is the catch-all for pull requests no EARLIER category matched, so every
-# specific category has to sit above it.
+# Generated release notes. CHANGELOG.md is the source of truth.
+# "*" catches anything no earlier category matched, so it stays last.
 changelog:
   exclude:
     labels:

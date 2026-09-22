@@ -1,45 +1,22 @@
 /**
- * Identity: the token (or lack of one) the widget's server uses to decide
- * who the user is. A token means a signed-in user; no token means an
- * anonymous user keyed to the install id.
- *
- * `initial()` runs inside the page's 8s handshake, part of which the
- * random-bytes round trip may already have spent, so it gets the short
- * `BOOT_RETRY_POLICY` ladder and a failure still leaves time to answer.
- * `refresh()` (`mentiora/refreshIdentity`) is bounded by the page's own 30s
- * request timeout instead, and gets the longer `REFRESH_RETRY_POLICY`.
- *
- * A failed boot must never demote a signed-in user to a fresh anonymous one.
- * `wasSignedInKey(embedKey)` records that this install has held a token; a
- * boot failure on a flagged install throws `IdentityUnavailable`, failing the
- * handshake, rather than answering anonymously and orphaning that user's
- * threads.
- *
- * The token never touches storage and is never logged; only the
- * `wasSignedIn` boolean is persisted.
+ * Identity: the token the server uses to decide who the user is; none means
+ * anonymous, keyed to the install id. `initial()` runs in the page's 8s
+ * handshake (`BOOT_RETRY_POLICY`), `refresh()` in its 30s request timeout
+ * (`REFRESH_RETRY_POLICY`). A boot failure on an install `wasSignedInKey` has
+ * flagged throws rather than demoting the user. Only that flag is persisted.
  */
 
 import { type RetryPolicy, retry } from './retry.js';
 import type { MentioraIdentity, MentioraStorage } from './types.js';
 
-/** The logout epoch, shared by every provider a runtime entry ever owns. A
- *  mutable box rather than a number because `getRuntime` swaps
- *  `runtime.identity` in place on any new `identity` reference — which an
- *  inline `identity={{ … }}` literal produces every render — and a provider
- *  discarded that way can still have a mint parked in `fetch`. A per-provider
- *  counter leaves that mint blind to the logout: it resumes, writes the
- *  `wasSignedIn` marker onto a logged-out install, and every later boot throws
- *  `IdentityUnavailable`. */
+/** Shared by every provider a runtime entry owns, so a discarded provider's
+ *  mint cannot write `wasSignedIn` onto a logged-out install (boot deadlock). */
 export type LogoutEpoch = { n: number };
 
 export type IdentityProvider = {
-  /**
-   * Boot: the token for InitializeResult, or undefined for anonymous. Throws
-   * IdentityUnavailable when the fetch fails and this install was signed in
-   * before — answering without a token would demote a signed-in user to a
-   * fresh anonymous one, so the caller fails the handshake and shows the
-   * error surface instead.
-   */
+  /** Boot: the token for InitializeResult, or undefined for anonymous. Throws
+   *  IdentityUnavailable when the fetch fails on a previously signed-in
+   *  install, so the caller fails the handshake instead of demoting the user. */
   initial: () => Promise<string | undefined>;
   /** mentiora/refreshIdentity. Throws IdentityUnavailable to produce -32002. */
   refresh: () => Promise<string>;
@@ -72,8 +49,7 @@ export const BOOT_RETRY_POLICY: RetryPolicy = {
   totalBudgetMs: 4000,
 };
 
-// base64url decode by hand (mirroring random.ts's encoder) rather than via
-// Buffer/atob: React Native's Hermes guarantees neither.
+// Hand-rolled: Hermes guarantees neither Buffer nor atob.
 const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const BASE64URL_LOOKUP: Record<string, number> = {};
 for (let i = 0; i < BASE64URL_ALPHABET.length; i++) {
@@ -127,8 +103,7 @@ const bytesToUtf8 = (bytes: Uint8Array): string => {
 
 type JwtPayload = { exp?: unknown; iat?: unknown };
 
-/** Decodes a JWT's payload segment without verifying anything; checking the
- *  signature is the server's job. Returns null for anything it cannot read. */
+/** Payload only, unverified — the signature is the server's job. */
 const decodePayload = (jwt: string): JwtPayload | null => {
   try {
     const segment = jwt.split('.')[1];
@@ -174,27 +149,14 @@ export const createIdentityProvider = (deps: {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? Date.now;
 
-  // The token lives only here, in memory, for this provider's lifetime.
-  // It is never handed to `storage`.
   let cache: { token: string; expMs: number } | undefined;
 
-  // Bumped synchronously at the top of `clear()`. An acquisition is a long
-  // chain of awaits — the retry ladder, `fetch`, a retry sleep, response
-  // parsing — and a `logout()` can land anywhere inside it, so every
-  // acquisition captures the epoch on entry and re-checks it before each write
-  // and before returning. A mismatch means the token belongs to a user who has
-  // since logged out, and it is dropped rather than published.
-  //
-  // Shared with every other provider on this embed key: the epoch belongs to
-  // the runtime entry, not to this closure. The default covers a provider
-  // built outside a runtime.
+  // Bumped synchronously at the top of `clear()`. An acquisition captures it
+  // on entry and re-checks before each write and before returning; a mismatch
+  // means the token's user has logged out, so it is dropped, not published.
   const epoch = deps.epoch ?? { n: 0 };
 
-  // Which epoch owns the `wasSignedIn` marker in storage, so a stale mint only
-  // ever undoes its own write: mint A parks in `setItem`, the user logs out and
-  // signs back in, mint B completes, and an unscoped undo by A would remove B's
-  // marker, demoting a signed-in install to anonymous on the next boot failure.
-  // Stamped before the await, so the later write always owns the marker.
+  // Owns the stored marker, so a stale mint only undoes its own write.
   let markerEpoch = -1;
 
   const isFresh = (floorMs: number): boolean =>
@@ -237,17 +199,14 @@ export const createIdentityProvider = (deps: {
     cache = exp !== null ? { token: raw, expMs: exp * 1000 } : undefined;
 
     try {
-      // Re-checked after the await too: `setItem` can resolve after a logout
-      // that started while it was pending, and a marker set on a logged-out
-      // install is a boot deadlock (`initial()` throws on it forever).
+      // Re-checked after the await: a marker on a logged-out install deadlocks.
       markerEpoch = myGen;
       await storage.setItem(wasSignedInKey(embedKey), '1');
       if (cleared() && markerEpoch === myGen) {
         await storage.removeItem(wasSignedInKey(embedKey));
       }
     } catch {
-      // A failed flag write must not fail a successful boot or refresh — the
-      // caller already has a token. Nothing else here swallows.
+      // A failed flag write must not fail a boot that already has a token.
     }
 
     if (cleared()) {
@@ -261,10 +220,8 @@ export const createIdentityProvider = (deps: {
 
   const initial = async (): Promise<string | undefined> => {
     if (!identity) {
-      // The marker is read before the anonymous shortcut. An install that has
-      // held a token and restarts before identity is configured — an app that
-      // boots the widget before its auth layer is ready — would otherwise be
-      // demoted to a fresh anonymous user with its threads orphaned.
+      // Before the anonymous shortcut: booting ahead of the host's auth layer
+      // must not demote a signed-in install to anonymous.
       const wasSignedIn = await storage.getItem(wasSignedInKey(embedKey));
       if (wasSignedIn) {
         throw new IdentityUnavailable(

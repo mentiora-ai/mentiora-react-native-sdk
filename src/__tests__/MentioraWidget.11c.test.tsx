@@ -1,5 +1,4 @@
-// Insets (`--mw-host-inset-*`) and Android's hardware back button: the release
-// protocol (`mentiora/backHandling`) and `.remove()` teardown.
+// Insets (`--mw-host-inset-*`) and Android's hardware back button.
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { useLayoutEffect } from 'react';
 import { BackHandler, Platform, StatusBar } from 'react-native';
@@ -13,17 +12,10 @@ import {
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
 
-// `react-native-safe-area-context` is an optional peer this repo does not install,
-// so its absence is real. This file's default is "present": a virtual mock, which is
-// how Jest mocks a module that is not on disk, scoped to this file's own module
-// registry. It is needed because Jest's default test platform is iOS, where this
-// peer is the only path that injects `--mw-host-inset-*` at all — the Android
-// StatusBar fallback does not apply there.
-//
-// The factory's value is inlined rather than a named const: `jest.mock` factories are
-// hoisted above every other statement in the file, including a `const` directly above
-// them, and may only reference identifiers on Jest's allowlist (names starting with
-// `mock`).
+// `react-native-safe-area-context` is an uninstalled optional peer; this virtual mock
+// is how the file defaults to "present", the only path injecting `--mw-host-inset-*` on
+// Jest's iOS platform. The value is inlined: `jest.mock` factories hoist above every
+// statement, including a `const` right above them, and may only name `mock*` identifiers.
 jest.mock(
   'react-native-safe-area-context',
   () => ({ initialWindowMetrics: { insets: { top: 44, right: 1, bottom: 34, left: 2 } } }),
@@ -47,8 +39,6 @@ const sent = (): Record<string, unknown>[] =>
     })
     .filter((m): m is Record<string, unknown> => m !== null);
 
-// Completes the handshake so a session key exists and `mentiora/backHandling` is
-// not dropped as unauthorized.
 const handshake = async (el: ReturnType<typeof screen.getByTestId>) => {
   await fireEvent(el, 'message', {
     nativeEvent: {
@@ -62,8 +52,7 @@ const handshake = async (el: ReturnType<typeof screen.getByTestId>) => {
   });
 };
 
-// Every send once a session exists carries `params.sessionKey` (peer.ts's
-// `withSessionParams`) — pull it off the last message sent so far.
+// Every send past the handshake carries `params.sessionKey` (peer.ts `withSessionParams`).
 const currentSessionKey = (): string => {
   const last = sent().at(-1) as { params?: { sessionKey?: string } } | undefined;
   const key = last?.params?.sessionKey;
@@ -71,9 +60,7 @@ const currentSessionKey = (): string => {
   return key;
 };
 
-// A `pressBack()` of `false` is also what a page with no session key gives, so the
-// stale-hold test has to show the replacement page's handshake landed. Every send
-// once a session exists carries the key, so its presence is the proof.
+// `false` is also what a keyless page gives, so the stale-hold test must show the key returned.
 const peerHasSession = (): boolean => {
   const last = sent().at(-1) as { params?: { sessionKey?: string } } | undefined;
   return typeof last?.params?.sessionKey === 'string';
@@ -86,8 +73,7 @@ const backHandling = (active: boolean): string =>
     params: { sessionKey: currentSessionKey(), active },
   });
 
-// The mock `BackHandler.addEventListener` in jest.setup.ts neither tracks nor
-// invokes the registered handler; it returns `{ remove: jest.fn() }`. Pressing back
+// The jest.setup.ts mock never invokes the registered handler, so pressing back
 // means calling the handler this component registered.
 const pressBack = (): boolean => {
   const add = BackHandler.addEventListener as jest.Mock;
@@ -125,14 +111,9 @@ test('back is unhandled by default — the page never claimed it', async () => {
 
 test('the BackHandler subscription is removed with .remove(), not removeEventListener', async () => {
   const remove = jest.fn();
-  // `jest.setup.ts` assigns `BackHandler.addEventListener` as a plain `jest.fn(...)`,
-  // a property overwrite rather than a real method. `jest.spyOn` on a target that is
-  // already a mock hands back that same reference, so `.mockReturnValue` mutates the
-  // shared mock in place and `.mockRestore()` has no original layer to restore: it
-  // resets to a generic mock with no return value, and the next test to mount a
-  // `MentioraWidget` crashes reading the subscription's `.remove()`. Reassigning a
-  // fresh `jest.fn()` in `finally` is what undoes it; `jest.config.js` sets no
-  // `restoreMocks`.
+  // `jest.spyOn` on a target that is already a `jest.fn()` returns that same reference, so
+  // `.mockRestore()` has no original layer and leaves a generic mock with no return value —
+  // the next mount crashes on `.remove()`. A fresh `jest.fn()` in `finally` undoes it.
   const add = jest
     .spyOn(BackHandler, 'addEventListener')
     .mockReturnValue({ remove } as unknown as ReturnType<typeof BackHandler.addEventListener>);
@@ -141,27 +122,19 @@ test('the BackHandler subscription is removed with .remove(), not removeEventLis
     expect(add).toHaveBeenCalledWith('hardwareBackPress', expect.any(Function));
     await view.unmount();
     expect(remove).toHaveBeenCalledTimes(1);
-    // `removeEventListener` was deleted in RN 0.77 and calling it throws — the
-    // component must never reach for it.
+    // `removeEventListener` was deleted in RN 0.77 and throws if called.
     expect((BackHandler as Record<string, unknown>).removeEventListener).toBeUndefined();
   } finally {
     BackHandler.addEventListener = jest.fn(() => ({ remove: jest.fn() }));
   }
 });
 
-// Back must not become a second way to be trapped. The page claims the button, then
-// a network incident resets the session key underneath it with nothing telling us the
-// button was released. `peer.sessionKey()`, re-checked at press time, unblocks back
-// once that reset has happened for the network and crash ladders — but not for the
-// handshake watchdog's give-up branch, which is why `onHardwareBack` checks
-// `dismissed`/`errorCode` first. The test below owns that case.
+// `peer.sessionKey()`, re-checked at press time, releases a button held across a reset.
 test('a stale hold intercepts once more before the ladder resets the session key (a known, bounded gap)', async () => {
   const el = await mount();
   await handshake(el);
   await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
   await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
-  // The incident is recorded, but `scheduleRecovery`'s own timer — the thing
-  // that actually resets the session key — has not fired yet.
   expect(pressBack()).toBe(true);
 });
 
@@ -172,16 +145,10 @@ test("once the ladder's own reload resets the session key, a stale hold no longe
     await handshake(el);
     await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
     await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
-    // Comfortably past the load ladder's first retry delay (~1s, cap 8s).
     await act(async () => jest.advanceTimersByTimeAsync(2000));
     expect(pressBack()).toBe(false);
-    // It must stay ours once the replacement page handshakes. The check above only
-    // covers the window between the reset and the next `initialize`:
-    // `peer.sessionKey() !== null` is true again the instant the new document
-    // handshakes, so a `backHeld` surviving the load boundary would be trusted from
-    // here on for a page that sent no `backHandling` at all — every press claimed
-    // and forwarded, the Modal never closing. Fails if `backHeld.current = false` is
-    // dropped from `advanceGeneration()`.
+    // The key returns the instant the new document handshakes, so a `backHeld` surviving the
+    // load boundary traps back. Fails without `backHeld.current = false` in `advanceGeneration()`.
     await handshake(el);
     expect(peerHasSession()).toBe(true); // the new page really did handshake
     expect(pressBack()).toBe(false);
@@ -190,30 +157,18 @@ test("once the ladder's own reload resets the session key, a stale hold no longe
   }
 });
 
-// The handshake watchdog's give-up branch (`armWatchdog`'s
-// `else { showError('handshake_timeout') }`) calls `showError` directly with no
-// `advanceGeneration`, unlike every other terminal branch. The peer's
-// `initializeLatch` and session key are untouched, so a slow page — a cold start past
-// two 8s watchdog cycles is ordinary — can still complete `initialize` and be handed
-// a live session key after the error surface is showing. The WebView stays mounted
-// under the overlay so Retry has something to retry. If that late page claims the
-// button, `peer.sessionKey() !== null` alone forwards every later back press to a
-// page hidden behind `importantForAccessibility="no-hide-descendants"`, with nothing
-// left to release it: the watchdog is spent, `HANDSHAKE_RECOVERY_CAP` being 1. The
-// `dismissed`/`errorCode` check that runs first in `onHardwareBack` is what prevents
-// it, and this test is what fails when that check goes.
+// The watchdog's give-up branch calls `showError` with no `advanceGeneration`, so a slow
+// page can still handshake and claim the button behind the error surface, trapping back.
+// The `dismissed`/`errorCode` check running first in `onHardwareBack` prevents it.
 test('a late handshake after handshake_timeout must not let backHandling trap the user', async () => {
   jest.useFakeTimers();
   try {
     const el = await mount();
-    // First watchdog timeout: one silent, unconditional reload. The generation does
-    // advance here — this is the recovery branch, not the give-up one.
+    // First timeout: the recovery branch, which does advance the generation.
     await act(async () => jest.advanceTimersByTimeAsync(8000));
-    // Second watchdog timeout, on the new generation: the cap of 1 is exceeded, so
-    // this is the give-up branch — `showError` with no `advanceGeneration`.
+    // Second: the cap of 1 is exceeded, so this is the give-up branch.
     await act(async () => jest.advanceTimersByTimeAsync(8000));
     expect(screen.getByRole('button', { name: DEFAULT_STRINGS.retry })).toBeTruthy();
-    // The slow page finally speaks, well after the error surface appeared.
     await handshake(el);
     await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
     expect(pressBack()).toBe(false);
@@ -232,10 +187,8 @@ test('insets are set from safe-area-context when present', async () => {
 });
 
 test('we never claim reportsViewport — the page tracks visualViewport itself', async () => {
-  // The one message shaped like a capability announcement is the `initialize`
-  // result, so that is where a `reportsViewport` claim would appear. A mount-only
-  // check never produces it and would pass even once the claim was added. Handshake
-  // first.
+  // A `reportsViewport` claim could only appear in the `initialize` result, which a
+  // mount-only check never produces — so handshake first.
   const el = await mount();
   await handshake(el);
   const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
@@ -245,10 +198,8 @@ test('we never claim reportsViewport — the page tracks visualViewport itself',
 });
 
 test('the react-native-safe-area-context peer, when installed, is what sets the inset values', async () => {
-  // Exercises the file's default "present" mock. All four sides, each as its own
-  // exact `setProperty(name, "Npx")` call: "44px and 34px appear somewhere" passes
-  // identically for an implementation that swaps top and bottom, or never sets right
-  // and left, which is the chat-under-the-notch failure this property prevents.
+  // All four sides as exact `setProperty` calls: "44px and 34px appear somewhere" also
+  // passes an implementation that swaps top and bottom or never sets right and left.
   await mount();
   const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
     ([s]) => s as string,
@@ -263,13 +214,8 @@ test('the react-native-safe-area-context peer, when installed, is what sets the 
   expect(setsProperty('--mw-host-inset-left', 2)).toBe(true);
 });
 
-// The next two drive `resolveHostInsets`'s branches through the test-only
-// `__resolveHostInsetsForTest` hook rather than a component render. Once
-// `require('react-native-safe-area-context')` has resolved in this file's module
-// registry it sticks: `jest.doMock` does not invalidate an already-resolved module
-// without `jest.resetModules()`, which would also discard React for this file's
-// already-rendered tests. Passing `load` in sidesteps that, which is what the seam
-// is for.
+// Driven through the `__resolveHostInsetsForTest` seam: once the peer has resolved in this
+// file's registry, only `jest.resetModules()` invalidates it — discarding React with it.
 test('without the peer, Android falls back to StatusBar.currentHeight', () => {
   const realOS = Platform.OS;
   const realHeight = StatusBar.currentHeight;
@@ -289,8 +235,7 @@ test('without the peer, Android falls back to StatusBar.currentHeight', () => {
 });
 
 test('with neither the peer nor Android, nothing is measurable — null, not a fabricated 0', () => {
-  // iOS with no peer needs nothing injected, and that has to be an actual `null`,
-  // not a `0` standing in for one.
+  // iOS with no peer injects nothing, and that must be an actual `null`, not a `0`.
   const realOS = Platform.OS;
   Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
   try {
@@ -301,11 +246,8 @@ test('with neither the peer nor Android, nothing is measurable — null, not a f
 });
 
 test('a malformed peer measurement (a shape mismatch, not just absence) is rejected, not interpolated', () => {
-  // Interpolating an undefined or non-numeric field into `${px}px` produces a
-  // syntactically valid custom-property token ("undefinedpx"), so nothing throws.
-  // The page's `max(env(...), var(--mw-host-inset-*))` then fails at computed-value
-  // time and drops the whole padding declaration, which is worse than never setting
-  // the property. `hasValidInsets`, inside `loadSafeAreaInsets`, is the guard.
+  // A non-numeric field interpolates to a valid token ("undefinedpx") that throws
+  // nowhere but drops the page's whole padding declaration. `hasValidInsets` guards it.
   expect(__hasValidInsetsForTest({ top: 44, right: 1, bottom: 34, left: 2 })).toBe(true);
   expect(
     __hasValidInsetsForTest({
@@ -327,9 +269,7 @@ test('a malformed peer measurement (a shape mismatch, not just absence) is rejec
 });
 
 test('a malformed peer measurement is rejected by loadSafeAreaInsets ITSELF, not only by the predicate', () => {
-  // `hasValidInsets` being correct in isolation does not prove `loadSafeAreaInsets`
-  // calls it, and the test above never goes through `loadSafeAreaInsets` at all.
-  // `requireModule` is the seam that exercises the wiring.
+  // The test above never goes through `loadSafeAreaInsets`; `requireModule` is that seam.
   const malformed = () => ({
     initialWindowMetrics: { insets: { top: undefined, right: 1, bottom: 34, left: 2 } },
   });
@@ -345,8 +285,7 @@ test('a malformed peer measurement is rejected by loadSafeAreaInsets ITSELF, not
   });
 });
 
-// `strings` on `ErrorScreen` is only reachable if `MentioraWidgetProps` carries a
-// `strings` field; without one a host override is dead on arrival.
+// `ErrorScreen`'s `strings` is reachable only if `MentioraWidgetProps` carries the field.
 test('a strings override on the public config reaches the rendered error screen', async () => {
   jest.useFakeTimers();
   try {
@@ -360,10 +299,8 @@ test('a strings override on the public config reaches the rendered error screen'
     }
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
-    // The per-key merge in `ErrorScreen` is what makes a partial override safe.
-    // Collapsing it to a plain `{ ...DEFAULT_STRINGS, ...strings }` spread behaves
-    // identically for every key overridden here and shows up only on the keys that
-    // are not — `dismiss` blanking on the one screen whose exit must stay visible.
+    // The per-key merge is what makes a partial override safe: a plain spread differs
+    // only on the keys left out, blanking `dismiss` on a screen that needs its exit.
     expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
     expect(screen.getByText(DEFAULT_STRINGS.errorTitle)).toBeTruthy();
     expect(screen.getByText(DEFAULT_STRINGS.errorBody)).toBeTruthy();
@@ -372,16 +309,8 @@ test('a strings override on the public config reaches the rendered error screen'
   }
 });
 
-// The BackHandler listener and the Modal's `backPress` registration refresh in a
-// layout effect, not a passive one. `onHardwareBack` closes over
-// `dismissed`/`errorCode`, and `showError` runs from a timer — a non-discrete lane
-// whose passive effects flush on the scheduler's next task. A press landing in that
-// gap runs the previous closure and, while the page holds the button, forwards
-// `mentiora/back` to a page sitting under the error surface instead of closing.
-//
-// React runs every layout effect in a commit before any passive effect, so a
-// sibling's `useLayoutEffect` is inside that gap by construction: it sees the
-// registration only if the widget registers from the commit phase too.
+// The back registration refreshes in a layout effect: `showError` runs from a timer whose
+// passive effects flush a task later, and a sibling's `useLayoutEffect` is inside that gap.
 test('the back registration lands in the commit, not in the passive flush', async () => {
   const add = BackHandler.addEventListener as jest.Mock;
   add.mockClear();

@@ -50,16 +50,13 @@ test('an over-long url is denied rather than parsed', () => {
 });
 
 test('isSameOrigin accepts a long, legitimately same-origin url -- no length bound here', () => {
-  // The 2048 bound belongs to isAllowedExternal only. A long same-origin url is the
-  // widget's own navigation, and applying that bound file-wide would deny it.
+  // The 2048 bound is isAllowedExternal's only; file-wide it would deny the widget's own nav.
   const origin = 'https://widget.acme.mentiora.ai';
   assert.equal(isSameOrigin(`${origin}/h/rn/k?state=${'a'.repeat(3000)}`, origin), true);
 });
 
 test('the CONFIGURED origin is normalised too, not just the url', () => {
-  // A customer pasting their origin out of a dashboard can capitalise the host. If only
-  // the url side were lowercased, every navigation would read cross-origin and the widget
-  // would try to open its own pages in the system browser.
+  // Lowercasing only the url side sends the widget's own pages to the system browser.
   assert.equal(
     isSameOrigin('https://widget.acme.mentiora.ai/h/rn/k', 'HTTPS://Widget.Acme.Mentiora.AI'),
     true,
@@ -78,10 +75,8 @@ test('an unparseable origin denies everything instead of matching everything', (
 });
 
 test('isSameOrigin denies when BOTH sides are unparseable, not only one', () => {
-  // originOf('') and originOf('not-a-url') are both null. `a !== null && b !== null`
-  // is the guard that stops two nulls from reading as equal (a bare `a === b` would
-  // let `null === null` slip through as a false ACCEPT). Every other test in this
-  // file only ever invalidates the widgetOrigin side, leaving that guard untested.
+  // Both sides unparseable: `a !== null && b !== null` is what stops `null === null`
+  // reading as a same-origin accept.
   assert.equal(isSameOrigin('', ''), false);
   assert.equal(isSameOrigin('not-a-url', 'also-not-a-url'), false);
   assert.equal(isSameOrigin('', 'not-a-url'), false);
@@ -89,10 +84,7 @@ test('isSameOrigin denies when BOTH sides are unparseable, not only one', () => 
 });
 
 test('originOf itself rejects a userinfo or backslash authority, not only through isSameOrigin', () => {
-  // isSameOrigin passing on these strings could equally mean "both sides parsed
-  // differently" as "originOf refused to parse the malformed side at all" -- since
-  // originOf is an exported, independently-relied-on contract, assert its null
-  // return directly rather than only through the two-sided comparison.
+  // originOf is relied on directly, so assert its null, not only the comparison.
   assert.equal(originOf('https://widget.acme.mentiora.ai@evil.com/x'), null);
   assert.equal(originOf('https://widget.acme.mentiora.ai\\.evil.com/'), null);
 });
@@ -105,9 +97,7 @@ test('a trailing dot on the host is a different origin (denied, not matched)', (
 });
 
 test('a URL-encoded @ or backslash does not decode into the raw separator', () => {
-  // %40 / %5C are NOT decoded before matching, so the whole encoded string is host —
-  // still a different origin than the bare widget host, so still denied. The point of
-  // the test is that this must not become a false ACCEPT via decode-then-compare.
+  // %40 / %5C are not decoded, so the encoded string is the host; decoding would accept.
   assert.equal(
     isSameOrigin('https://widget.acme.mentiora.ai%40evil.com/x', 'https://widget.acme.mentiora.ai'),
     false,
@@ -122,16 +112,14 @@ test('a URL-encoded @ or backslash does not decode into the raw separator', () =
 });
 
 test('a null byte inside "javascript:" recombines under clean(), denied by the allow-list', () => {
-  // clean() is a global replace, not a trim, so the embedded NUL disappears and
-  // 'java' + 'script:' fuse back into 'javascript:'. What denies it is the
-  // allow-list, not the NUL surviving to break the scheme match.
+  // clean() is a global replace, so the embedded NUL vanishes and 'javascript:'
+  // reassembles; the allow-list is what denies it, not the broken scheme match.
   assert.equal(schemeOf('java\u0000script:alert(1)'), 'javascript:');
   assert.equal(isAllowedExternal('java\u0000script:alert(1)'), false);
 });
 
 test('a tab inside "https:" is stripped by clean() and recombines to a valid scheme', () => {
-  // Same recombination as above, but landing on an ALLOWED scheme: clean() strips the
-  // tab (C0), so 'ht\ttps:' becomes 'https:' and the url is correctly allowed.
+  // Same recombination landing on an allowed scheme: 'ht\ttps:' becomes 'https:'.
   assert.equal(schemeOf('ht\ttps://example.com'), 'https:');
   assert.equal(isAllowedExternal('ht\ttps://example.com'), true);
 });
@@ -143,14 +131,11 @@ test('mixed case in the scheme only is still recognised', () => {
 
 test('an IPv6 host is a different literal string than the configured hostname', () => {
   assert.equal(isSameOrigin('https://[::1]/x', 'https://widget.acme.mentiora.ai'), false);
-  // and IPv6-vs-IPv6 matches by exact string
   assert.equal(isSameOrigin('https://[::1]:8443/x', 'https://[::1]:8443'), true);
 });
 
 test('a trailing space on the host is stripped by clean(), changing what host is compared', () => {
-  // clean() strips trailing whitespace (C0/space) from the whole string, so
-  // 'https://widget.acme.mentiora.ai /x' becomes 'https://widget.acme.mentiora.ai/x'
-  // -- i.e. it does NOT create a spurious host that reads as same-origin by accident.
+  // clean() strips the space rather than inventing a host that reads as same-origin.
   assert.equal(
     isSameOrigin('https://widget.acme.mentiora.ai /evil', 'https://widget.acme.mentiora.ai'),
     true,
@@ -158,16 +143,13 @@ test('a trailing space on the host is stripped by clean(), changing what host is
 });
 
 test('single-slash and triple-slash forms are not treated as authority-bearing', () => {
-  // One slash: '://' is matched as a literal, so 'https:/host' never reaches the
-  // authority capture at all.
+  // One slash: '://' is a literal, so the authority capture is never reached.
   assert.equal(originOf('https:/widget.acme.mentiora.ai'), null);
   assert.equal(
     isSameOrigin('https:/widget.acme.mentiora.ai', 'https://widget.acme.mentiora.ai'),
     false,
   );
-  // Three slashes: after the literal '//', the third '/' is itself excluded from the
-  // host character class, so the host group has nothing to capture and the whole
-  // match fails -- it must NOT fall through to an empty/host-less same-origin match.
+  // Three slashes: the third is excluded from the host class, so the match fails.
   assert.equal(originOf('https:///widget.acme.mentiora.ai'), null);
   assert.equal(
     isSameOrigin('https:///widget.acme.mentiora.ai', 'https://widget.acme.mentiora.ai'),
@@ -175,8 +157,7 @@ test('single-slash and triple-slash forms are not treated as authority-bearing',
   );
 });
 
-// A fragment jump is the same document. Treating it as a load boundary in
-// MentioraWidget's `onShouldStartLoadWithRequest` drops a live session key.
+// A fragment jump is the same document; treating it as a load boundary drops a live session key.
 test('isSameDocument ignores the fragment and nothing else', () => {
   const base = 'https://w.x.ai/h/rn/k';
   assert.equal(isSameDocument(base, `${base}#thread-2`), true);
@@ -187,9 +168,7 @@ test('isSameDocument ignores the fragment and nothing else', () => {
   assert.equal(isSameDocument(base, 'https://w.x.ai/h/rn/other'), false);
 });
 
-// Per the HTML navigate algorithm a navigation is fragment-only when the TARGET
-// carries a fragment. Reporting either of these as "same document" leaves a
-// genuinely new document unable to initialize for 8s.
+// Per the HTML navigate algorithm a navigation is fragment-only when the TARGET carries a fragment.
 test('a same-URL reload and a fragment removal are both new documents', () => {
   const base = 'https://w.x.ai/h/rn/k';
   assert.equal(isSameDocument(base, base), false, 'location.reload() is a full navigation');

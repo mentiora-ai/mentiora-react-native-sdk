@@ -1,12 +1,7 @@
 name: Release
 
-# A human drafts a Release in the GitHub UI; publishing it runs this workflow.
-# npm matches the trusted publisher on this file's name, not on the trigger
-# event, so the Releases trigger is fine.
-#
-# The FIRST publish cannot run here. npm's trusted publisher is configured per
-# package and the package must already exist, so 0.0.1 is published once by a
-# human with 2FA; every release after it comes through this workflow.
+# Publishing a GitHub Release runs this; npm matches the trusted publisher on this
+# file's name, not the trigger. The first publish goes out by hand with 2FA.
 on:
   release:
     types: [published]
@@ -35,16 +30,13 @@ jobs:
           node-version-file: .nvmrc
           registry-url: https://registry.npmjs.org
 
-      # A tag can be created against any commit from any branch, including one
-      # that never passed review. Publish only what is on main.
+      # A tag can point at any commit, including one that never passed review.
       - name: refuse a tag that is not on main
         run: |
           git fetch --no-tags origin main
           git merge-base --is-ancestor HEAD FETCH_HEAD \
             || { echo "::error::${{ github.event.release.tag_name }} points at a commit that is not on main"; exit 1; }
 
-      # Ties the tag to package.json, src/version.ts, the CHANGELOG entry and
-      # the prerelease flag the publish step reads below.
       - name: assert the release is coherent
         env:
           RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
@@ -60,8 +52,7 @@ jobs:
       # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.
       - run: npm install -g npm@latest
 
-      # Without an explicit dist-tag a prerelease publishes to latest and
-      # reaches every consumer running a plain install.
+      # Without an explicit dist-tag a prerelease would publish to latest.
       - name: publish
         run: |
           DIST_TAG=latest

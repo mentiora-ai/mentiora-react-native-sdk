@@ -120,9 +120,7 @@ test('retries then throws IdentityUnavailable inside the 8s budget', async () =>
 });
 
 test('boot gets the shorter ladder, because it runs inside the 8s handshake', async () => {
-  // The wasSignedIn flag is seeded because counting BOOT_RETRY_POLICY's attempts
-  // needs the failure path to throw. On a never-signed-in install a boot failure
-  // resolves `undefined` instead, which is what the next test covers.
+  // wasSignedIn is seeded so the boot failure throws rather than resolving `undefined`.
   let hits = 0;
   const { storage, m } = memory();
   m.set(wasSignedInKey('k'), '1');
@@ -170,7 +168,6 @@ test('a token obtained once sets wasSignedIn, and a later boot failure then thro
   assert.ok(await p.initial());
   assert.ok(m.get(wasSignedInKey('k')), 'the flag is what survives the process, not the token');
   up = false;
-  // A fresh provider over the same storage: the app was killed and relaunched offline.
   const p2 = createIdentityProvider({
     embedKey: 'k',
     storage,
@@ -246,13 +243,10 @@ test('a failed wasSignedIn flag write does not fail an otherwise-successful boot
   );
 });
 
-// Two invariants the rest of the file leaves unasserted: a token must not outlive
-// a logout, and the token must never touch storage.
+// A token must not outlive a logout, and must never touch storage.
 
 test('clear drops the cached token too, so the next user never inherits it', async () => {
-  // The fetcher shape is the only one with a reuse window: `refresh()` on a
-  // `getToken` provider always re-calls, so the same test written against it
-  // passes with the cache left fully intact.
+  // Only the fetcher shape has a reuse window; `refresh()` on `getToken` always re-calls.
   const now = 1_000_000_000_000;
   let hits = 0;
   const p = make({
@@ -277,8 +271,7 @@ test('clear drops the cached token too, so the next user never inherits it', asy
 });
 
 test('the only value ever written under the wasSignedIn key is the flag, never the token', async () => {
-  // The token lives in memory only. `assert.ok(m.get(...))` above is truthy for a
-  // JWT just as happily as for '1', so it does not pin that down.
+  // The token lives in memory only; the truthiness check above misses that.
   const { m, storage } = memory();
   const written: string[] = [];
   const watched: MentioraStorage = {
@@ -301,10 +294,9 @@ test('the only value ever written under the wasSignedIn key is the flag, never t
   assert.ok(![...m.values()].includes(token), 'the token must never reach storage');
 });
 
-// `mintToken` writes `cache` and the `wasSignedIn` marker behind a generation
-// check. Without one, a `refresh()`/`initial()` sitting in `retry`, `fetch`, a
-// retry sleep or response parsing when `clear()` runs resumes afterwards and puts
-// both back, and the next boot reuses a pre-logout token.
+// `mintToken` writes `cache` and the marker behind a generation check. Without it,
+// a mint in flight when `clear()` runs puts both back and the next boot reuses a
+// pre-logout token.
 test('a mint that resumes after clear() repopulates neither the cache nor the marker', async () => {
   const { m, storage } = memory();
   let calls = 0;
@@ -331,8 +323,6 @@ test('a mint that resumes after clear() repopulates neither the cache nor the ma
   await assert.rejects(inFlight, IdentityUnavailable);
   assert.equal(m.get(wasSignedInKey('k')), undefined, 'the marker must not come back');
 
-  // And nothing was cached: a surviving pre-logout token would be handed back
-  // here with no second fetch.
   await p.refresh();
   assert.equal(calls, 2, 'the pre-logout token must not be reused from cache');
 });
@@ -384,10 +374,8 @@ test('an uninterrupted mint still caches and still writes the marker', async () 
   assert.equal(calls, 1, 'the cache still works when no logout intervened');
 });
 
-// `initial()` reads the marker before returning anonymous on `!identity`.
-// Returning first demotes a signed-in install that restarts while identity is not
-// yet configured to a fresh anonymous user, orphaning its threads — the failure
-// the marker exists to prevent.
+// `initial()` must read the marker before returning anonymous on `!identity`, or a
+// signed-in install restarting before identity is configured is demoted.
 test('a signed-in install with no identity configured fails the handshake', async () => {
   const { m, storage } = memory();
   m.set(wasSignedInKey('k'), '1');
@@ -401,11 +389,8 @@ test('an install that was never signed in still boots anonymous with no identity
   assert.equal(await p.initial(), undefined);
 });
 
-// The test above still passes with the post-`retry` `cleared()` check deleted,
-// because its assertions are satisfied by the two later checks. That check is the
-// only thing keeping `cache` from holding a pre-logout token during the
-// `await storage.setItem` window, where a concurrent `refresh()` on a fetcher-shape
-// provider takes the `isFresh` shortcut straight into it.
+// The post-`retry` `cleared()` check is what keeps `cache` empty across the `await
+// storage.setItem` window, where a concurrent `refresh()` takes `isFresh`.
 test('a mint resuming after clear() never publishes its token, not even transiently', async () => {
   const now = 1_000_000_000_000;
   const tokenA = jwt(now / 1000 + 3600);
@@ -465,10 +450,8 @@ test('a mint resuming after clear() never publishes its token, not even transien
   await assert.rejects(inFlight, IdentityUnavailable);
 });
 
-// A stale mint's undo is scoped to its own generation. Unscoped, it removes
-// whatever marker is in storage and wipes whatever token is cached, even when both
-// belong to a newer mint that has already completed, leaving a signed-in install
-// with no marker that a later boot failure demotes to anonymous.
+// A stale mint's undo is scoped to its own generation; unscoped it wipes a newer
+// mint's marker and token, leaving a signed-in install a boot failure demotes.
 test("a stale mint's undo cannot erase a newer mint's marker or cache", async () => {
   const now = 1_000_000_000_000;
   const tokenA = jwt(now / 1000 + 3600);

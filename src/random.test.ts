@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createRandomSource, RANDOM_REPLY_TAG, toBase64Url } from './random.js';
 
-// The nonce the host embedded in the injected script. Read back out of the
-// script rather than injected through a seam, so a fix that stopped carrying
-// it at all would fail here too.
+// Read back out of the injected script, so dropping the nonce entirely fails here.
 const nonceOf = (script: string): string => {
   const m = /,k="([^"]+)"/.exec(script);
   assert.ok(m, 'the injected script must carry a per-request nonce');
@@ -126,10 +124,8 @@ test('a throwing globalCrypto rejects instead of throwing synchronously', async 
   await assert.rejects(src.bytes(16), /broken polyfill/);
 });
 
-// A reset must invalidate every parked random-bytes resolver, not only every
-// in-flight `receive`. A request parked by a document that has since been replaced
-// otherwise holds the single-in-flight slot for its full 2s timeout, and the
-// replacement page's `initialize` is rejected on its first line.
+// A reset must invalidate parked random-bytes resolvers too: one left by a replaced
+// document holds the single in-flight slot for 2s and rejects the new `initialize`.
 test('reset frees the single-in-flight slot for the replacement page', async () => {
   let cleared = 0;
   let script = '';
@@ -147,8 +143,7 @@ test('reset frees the single-in-flight slot for the replacement page', async () 
   await assert.rejects(parked, /superseded/);
   assert.equal(cleared, 1, "the dead request's 2s timer must not outlive it");
 
-  // The next page may ask, rather than taking "already in flight" and failing
-  // its handshake.
+  // The next page may ask, rather than hitting "already in flight".
   const fresh = src.bytes(16);
   assert.equal(src.acceptReply(reply(script, { bytes: Array(16).fill(3) })), true);
   assert.equal((await fresh)[0], 3);
@@ -168,10 +163,8 @@ test('reset with nothing parked is a no-op, not a spurious rejection', async () 
   assert.equal((await src.bytes(16))[0], 1);
 });
 
-// The reply is authenticated by nonce, not by `obj.tag` alone, which is a module
-// constant. Anything that can reach `ReactNativeWebView.postMessage` — the page's
-// sandboxed custom-block iframe above all — could otherwise hand back 16 chosen
-// bytes while a request is pending and pick both the session key and the install id.
+// Authenticated by nonce, not by the module-constant `obj.tag`: anything reaching
+// `ReactNativeWebView.postMessage` could otherwise choose the session key and install id.
 test('a tagged reply with a foreign nonce neither resolves nor consumes the request', async () => {
   let script = '';
   let cleared = 0;
@@ -192,13 +185,11 @@ test('a tagged reply with a foreign nonce neither resolves nor consumes the requ
   assert.equal(forged, false, 'not ours: it must fall through to the JSON-RPC parser');
   assert.equal(cleared, 0, 'the pending request must not have been consumed');
 
-  // A reply with no nonce at all must fare no better.
   assert.equal(
     src.acceptReply(JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(0) })),
     false,
   );
 
-  // The real reply still works, and the attacker's bytes are nowhere in it.
   assert.equal(src.acceptReply(reply(script, { bytes: Array(16).fill(9) })), true);
   const b = await p;
   assert.equal(b[0], 9);

@@ -1,6 +1,4 @@
-// tsc cannot vary module system per output directory, so each build dir gets a
-// package.json declaring its own type. This is what lets the root package.json
-// stay type-less, which Jest and Metro's CJS-first resolution both prefer.
+// tsc cannot vary module system per output dir, so each gets its own package.json type.
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

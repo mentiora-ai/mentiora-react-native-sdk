@@ -6,9 +6,7 @@ import { __resetRuntimes, getRuntime } from './runtime.js';
 
 const cfg = (embedKey: string) => ({ widgetOrigin: 'https://w.x.ai', embedKey });
 
-// Distinct bytes per call. A constant fill would make the post-rotate install id identical
-// to the pre-rotate one, and every `notEqual` below would pass for the wrong reason —
-// or fail while the code is correct.
+// Distinct bytes per call: a constant fill makes every `notEqual` below meaningless.
 let seed = 0;
 const bytes = async (n: number) => new Uint8Array(n).fill(++seed % 251);
 
@@ -128,17 +126,13 @@ test('swapping identity does not clear the wasSignedIn flag — that is not a lo
   assert.equal(store.get(wasSignedInKey('k')), '1', 'the flag must survive an identity swap');
 });
 
-// Two widgets share this runtime but not their WebViews, and `random.ts` allows
-// exactly one request in flight per source. A source captured when the runtime was
-// built therefore belongs to somebody else, and is often busy or gone. A single-
-// source test cannot see that.
+// Two widgets share a runtime but not their WebViews, and `random.ts` allows one
+// request in flight per source, so a source captured at build time is often busy.
 test('single-flight covers the second caller, and a busy source is never touched', async () => {
   __resetRuntimes();
-  // No real timers: an unanswered request must not arm a 2s timeout that keeps
-  // the test runner alive (and then rejects into nothing).
+  // No real timers: an unanswered request would arm a 2s timeout that outlives the test.
   const noTimers = { setTimer: () => 0, clearTimer: () => {} };
 
-  // Widget A: mid-handshake, its source already waiting on the session-key reply.
   const a = createRandomSource({ inject: () => {}, ...noTimers });
   const aSessionKey = a.bytes(16);
   aSessionKey.catch(() => {}); // never answered here
@@ -148,7 +142,6 @@ test('single-flight covers the second caller, and a busy source is never touched
     return a.bytes(n);
   };
 
-  // Widget B: its own WebView, its own source, free.
   const b = createRandomSource({
     inject: () => {},
     ...noTimers,
@@ -167,11 +160,7 @@ test('single-flight covers the second caller, and a busy source is never touched
   );
 });
 
-// `Promise.all` evaluates its array elements synchronously, so above the first call
-// wins by call order, not by caller identity: a `buildEntry` that captured the first
-// `randomBytes` it was ever handed would pass there too. Two separate sequential
-// mints, with `logout()` between them to clear the memo, pin that the second source
-// is the one invoked and the one whose bytes come back.
+// `Promise.all` wins by call order, so sequential mints are what pin the second source.
 test("a later mint, after logout, invokes that call's own source rather than an earlier one", async () => {
   __resetRuntimes();
   const noTimers = { setTimer: () => 0, clearTimer: () => {} };
@@ -214,11 +203,7 @@ test("a later mint, after logout, invokes that call's own source rather than an 
   );
 });
 
-// Nothing else covers the identity half of `logout()`: the presenter's logout tests
-// check the install id only, and "logout rotates and clears identity" above asserts
-// the rotation and the subscriber. Dropping `await runtime.identity.clear()` leaves
-// the previous user's `wasSignedIn` flag set on a now-anonymous install, which
-// `initial()` turns into a hard handshake failure on every later boot.
+// Without `identity.clear()` the previous user's `wasSignedIn` strands every later boot.
 test('logout clears identity too, not only the install id', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -245,10 +230,7 @@ test('logout clears identity too, not only the install id', async () => {
   assert.equal(store.get(wasSignedInKey('k')), undefined);
 });
 
-// Dropping the install-id memo and then awaiting the rotation leaves a window in
-// between: a mint landing there misses the memo, reads storage before `removeItem`
-// has landed, and returns and re-memoises the pre-rotation id — the previous user's,
-// handed to the next one.
+// Dropping the memo before awaiting the rotation lets a mint re-memoise the old id.
 test('an installId() landing mid-logout waits for the rotation instead of reading past it', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -261,8 +243,7 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
     setItem: async (k: string, v: string) => {
       store.set(k, v);
     },
-    // A rotation that takes a moment — AsyncStorage is a real round trip to
-    // native, so this window is not hypothetical.
+    // AsyncStorage is a real round trip to native, so this window is not hypothetical.
     removeItem: async (k: string) => {
       await landed;
       store.delete(k);
@@ -284,14 +265,9 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
   );
 });
 
-// Assigning `rotation` the rotation promise itself, and clearing it only on the line
-// after the await, leaves it pointing at a rejected promise forever once `removeItem`
-// rejects: every later `installId()` parks behind it and re-throws a failure that is
-// long over. Through the `initialize` handler's catch that is an error screen the
-// user cannot get past for the life of the process.
-//
-// Two tests, split by when the mint arrives, because two independent lines each stop
-// the permanent case on their own and a single test would pass under either mutation.
+// A `rotation` left pointing at a rejected promise makes every later `installId()`
+// re-throw a dead failure — a permanent error screen. Split in two because two
+// independent lines each stop it on their own.
 const failingRotation = () => {
   const store = new Map<string, string>();
   let failRemove = true;
@@ -313,9 +289,7 @@ const failingRotation = () => {
   };
 };
 
-// Fails on `rotation = rotating` in place of `rotation = rotating.catch(() =>
-// undefined)`, where a mint parked before the `finally` ran inherits the rotation's
-// failure.
+// Fails without the `.catch()`, where a mint parked before the `finally` inherits the failure.
 test('a mint landing DURING a failing logout does not inherit the failure', async () => {
   __resetRuntimes();
   const { storage } = failingRotation();
@@ -333,8 +307,7 @@ test('a mint landing DURING a failing logout does not inherit the failure', asyn
   );
 });
 
-// The other half: with `rotation` left a rejected promise, every later mint re-throws
-// a failure that is over.
+// The other half: every later mint re-throws a failure that is over.
 test('a removeItem failure during logout does not poison every later install-id mint', async () => {
   __resetRuntimes();
   const { storage, heal } = failingRotation();
@@ -345,16 +318,12 @@ test('a removeItem failure during logout does not poison every later install-id 
 
   heal(); // the disk is fine again
   assert.equal(await rt.installId(bytes), before);
-  // The second and third calls too: a one-shot rejected promise would satisfy
-  // a single retry by accident.
+  // Second and third too: a one-shot rejection would satisfy a single retry by accident.
   assert.equal(await rt.installId(bytes), before);
   assert.equal(await rt.installId(bytes), before);
 });
 
-// `logout()` waits for a mint that is already running. Dropping `inFlight` and
-// rotating without waiting lets a `loadOrCreateInstallId` blocked in `storage.setItem`
-// commit after `removeItem`: the pre-logout id survives its own rotation, or two
-// surfaces end up on two different anonymous users.
+// Without `inFlight`, a write blocked in `setItem` commits after `removeItem`.
 test('a pre-logout install-id write cannot land after the rotation deleted it', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -370,8 +339,6 @@ test('a pre-logout install-id write cannot land after the rotation deleted it', 
       if (k.includes('installId')) order.push('setItem');
       store.set(k, v);
     },
-    // The identity provider removes its own key here too; only the install id
-    // is what this test is about.
     removeItem: async (k: string) => {
       if (k.includes('installId')) order.push('removeItem');
       store.delete(k);
@@ -389,8 +356,7 @@ test('a pre-logout install-id write cannot land after the rotation deleted it', 
   assert.deepEqual(order, ['setItem', 'removeItem'], 'the delete must come last');
   assert.equal(store.size, 0, 'nothing may survive the rotation');
 
-  // And the next widget mints a genuinely new id rather than reading the
-  // previous user's write back out of storage.
+  // The next widget mints a new id rather than reading the previous user's write back.
   const after = await rt.installId(bytes);
   assert.notEqual(after, await minting);
 });
@@ -427,9 +393,7 @@ test('a rejecting pre-logout mint still lets the rotation through (settle, not s
   assert.ok(await rt.installId(bytes));
 });
 
-// Reading `runtime.identity` only at the end of `logout()` leaves a provider swapped
-// in by `getRuntime()` while the rotation is in flight outside the logout — free to
-// write its token and the `wasSignedIn` marker back afterwards.
+// Reading `runtime.identity` only at the end leaves a mid-rotation swap outside the logout.
 test('a provider swapped in mid-logout is inside the logout, and so is the old one', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -456,7 +420,6 @@ test('a provider swapped in mid-logout is inside the logout, and so is the old o
   const wrappedFirst = rt.identity;
 
   const loggingOut = rt.logout(); // captures wrappedFirst, then parks in removeItem
-  // The customer reconfigures with a different identity reference mid-logout.
   getRuntime({ ...cfg('swap'), storage, identity: { getToken: () => 't2' } });
   const second = rt.identity;
   assert.notEqual(second, wrappedFirst, 'getRuntime swapped the provider in place');
@@ -469,9 +432,7 @@ test('a provider swapped in mid-logout is inside the logout, and so is the old o
   assert.equal(secondCleared, 1, 'and the one swapped in while it ran');
 });
 
-// The rotation has already happened by the time `clear()` runs, so letting a
-// rejecting `clear()` skip the reload subscribers leaves the mounted WebView running
-// with its pre-logout token while storage holds no install id at all.
+// A rejecting `clear()` that skips the reload leaves the WebView on a pre-logout token.
 test('a rejecting clear() still reloads every subscriber, and still rejects', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -495,10 +456,8 @@ test('a rejecting clear() still reloads every subscriber, and still rejects', as
   assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout token');
 });
 
-// Nulling `inFlight` unconditionally in the memo's `.finally` lets a prior mint
-// settling after `logout()` erase the memo a post-logout caller already installed.
-// The next caller finds no memo, reads storage past the rotation and mints a second
-// id, putting two surfaces on two different anonymous users.
+// Nulling `inFlight` unconditionally lets a prior mint erase a post-logout memo, so
+// the next caller mints a second id and two surfaces get two anonymous users.
 test('a prior mint settling after logout does not erase the post-logout memo', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -545,13 +504,9 @@ test('a prior mint settling after logout does not erase the post-logout memo', a
   assert.equal(await rt.installId(bytes), await postLogout, 'one post-logout id, not two');
 });
 
-// The logout generation is shared, not a closure local of each provider. As a local,
-// a provider `getRuntime` discards on an identity swap — which an inline
-// `identity={{ getToken }}` literal triggers on every render, by this module's
-// reference-equality contract — never sees the logout: its parked mint resumes and
-// writes the `wasSignedIn` marker onto a logged-out install, after which `initial()`
-// throws `IdentityUnavailable` on every boot and the user is stuck on a
-// `handshake_timeout` screen permanently.
+// The logout generation is shared, not per-provider: as a local, a provider discarded
+// by an identity swap never sees the logout and writes `wasSignedIn` back onto a
+// logged-out install, stranding every later boot on a handshake_timeout screen.
 test('a provider discarded by an identity swap is still inside a later logout', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -577,8 +532,7 @@ test('a provider discarded by an identity swap is still inside a later logout', 
   });
   const booting = rt.identity.initial(); // parked inside getToken on the FIRST provider
 
-  // A re-render passing a fresh object literal: `getRuntime` swaps the provider
-  // in place and the one above becomes unreachable — with its mint still live.
+  // A fresh object literal: `getRuntime` swaps the provider, its mint still live.
   getRuntime({ ...cfg('f3'), storage, identity: { getToken: () => 'second' } });
 
   await rt.logout();
@@ -592,9 +546,8 @@ test('a provider discarded by an identity swap is still inside a later logout', 
   );
 });
 
-// The rotation half of the case above: an `installId` `removeItem` rejection
-// propagating straight out leaves the identity cache, the `wasSignedIn` marker and
-// every mounted WebView's session alive through the logout.
+// A `removeItem` rejection propagating straight out leaves the identity cache, the
+// marker and every WebView session alive through the logout.
 test('a rejecting rotation still clears identity, still reloads, and still rejects', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();

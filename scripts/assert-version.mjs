@@ -1,6 +1,5 @@
-// Release guard. The GitHub Releases UI lets a human tag any commit with any
-// text, so nothing ties the published version to the tag, to the changelog, or
-// to the prerelease flag by itself. Run before publish.
+// Release guard: nothing else ties the published version to the tag, the
+// changelog or the prerelease flag.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,17 +22,13 @@ if (!version.includes(`'${pkg.version}'`)) {
   throw new Error('src/version.ts is stale — run "bun run gen:version" and commit it');
 }
 
-// The changelog names the bridge protocol version each release speaks, so a
-// release without its entry ships a package whose compatibility is unrecorded.
 const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
 const heading = new RegExp(`^## ${pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
 if (!heading.test(changelog)) {
   throw new Error(`CHANGELOG.md has no "## ${pkg.version}" section`);
 }
 
-// A prerelease published under the default dist-tag reaches every consumer
-// running a plain install, so the semver and the GitHub prerelease flag have to
-// agree before release.yml picks the tag from that same flag.
+// release.yml picks the dist-tag from this flag; disagree and a prerelease goes to latest.
 const isPrerelease = pkg.version.includes('-');
 const flagged = process.env.RELEASE_PRERELEASE === 'true';
 if (isPrerelease !== flagged) {

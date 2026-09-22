@@ -268,10 +268,8 @@ test('work from a superseded load generation neither sends nor mutates', async (
   assert.equal(peer.sessionKey(), null, 'nor overwrite the new session');
 });
 
-// `-32003` (URL denied) and `-32002` (identity unavailable) are both required
-// answers, and neither is reachable while every handler rejection collapses to
-// `-32603`. The peer does not know what a URL or an identity is, so the code
-// rides on the throw.
+// `-32003` and `-32002` are required answers, unreachable while every handler
+// rejection collapses to `-32603`, so the code rides on the throw.
 const peerThatThrows = (e: unknown) => {
   const sent: string[] = [];
   const peer = createHostPeer({
@@ -326,12 +324,8 @@ test('any other throw is still -32603 with the generic message', async () => {
   assert.deepEqual(lastSent(sent).error, { code: -32603, message: 'Internal error' });
 });
 
-// The session-key check applies to page->host responses as well as requests and
-// notifications, and responses are the one of the three with no other guard
-// behind them. `fixtures.test.ts` replays `unknown-method`'s response through a
-// peer whose key already matches, so it only ever walks the accept side: without
-// the two tests below, replacing the check's condition with `if (false)` leaves
-// the suite green.
+// The session-key check also covers page->host responses, which have no other guard.
+// Without these two, `if (false)` in its place leaves the suite green.
 test('a page-sent response with a wrong session key is rejected with -32001', async () => {
   const { peer, sent } = makePeer();
   await peer.receive(
@@ -350,9 +344,7 @@ test('a page-sent response with a wrong session key is rejected with -32001', as
 });
 
 test('a page-sent response with the RIGHT session key is accepted in silence', async () => {
-  // The other half: a peer that answered -32001 to every response would pass
-  // the test above just as happily, and would break the `unknown-method`
-  // host-role fixture in production.
+  // The other half: a peer answering -32001 to every response also passes the test above.
   const { peer, sent } = makePeer();
   await peer.receive(
     '{"jsonrpc":"2.0","id":"r1","method":"mentiora/initialize","params":{"protocolVersion":1}}',

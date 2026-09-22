@@ -1,7 +1,6 @@
-// `scripts/run-core-tests.mjs` is the only thing standing between a tsconfig
-// change that silently stops emitting core tests and a green CI. A guard that
-// fires only when the emitted count is zero lets a change dropping all but one
-// test file pass while CI runs a silent subset.
+// `run-core-tests.mjs` is all that stands between a tsconfig change that stops
+// emitting core tests and a green CI running a silent subset. The marker each
+// fixture leaves, not the exit code, proves it was executed rather than listed.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -11,8 +10,6 @@ import { test } from 'node:test';
 
 const script = new URL('../scripts/run-core-tests.mjs', import.meta.url).pathname;
 
-// Leaves a marker beside itself: the marker, not the runner's exit code, is what
-// proves a given file was actually executed rather than merely listed.
 const PASSING = [
   "import { test } from 'node:test';",
   "import { writeFileSync } from 'node:fs';",
@@ -20,8 +17,6 @@ const PASSING = [
   '',
 ].join('\n');
 
-/** A throwaway project with the runner in place: `sources` are created under
- *  src/, `emitted` under lib-test/. */
 const tree = (sources, emitted) => {
   const root = mkdtempSync(join(tmpdir(), 'core-runner-'));
   mkdirSync(join(root, 'scripts'), { recursive: true });
@@ -38,9 +33,8 @@ const tree = (sources, emitted) => {
 };
 
 const run = (root) => {
-  // NODE_TEST_CONTEXT is set for the process running this file, and a nested
-  // `node --test` that inherits it reports to a parent that is not listening: it
-  // runs nothing and prints nothing. Dropping it is what makes the fixture execute.
+  // A nested `node --test` inheriting NODE_TEST_CONTEXT reports to a parent that
+  // is not listening: it silently runs nothing. Dropping it makes the fixture run.
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   return execFileSync(process.execPath, [join(root, 'scripts', 'run-core-tests.mjs')], {

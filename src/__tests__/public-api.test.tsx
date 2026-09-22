@@ -1,12 +1,10 @@
-// Named `.tsx`, not `.ts`: `jest.config.js` matches only `src/**/*.test.tsx` and
-// `tsconfig.test.json` excludes `src/__tests__`, so a `.ts` file here is compiled
-// by nothing and run by nothing — a suite that silently never executes.
+// Named `.tsx`, not `.ts`: Jest matches only `*.test.tsx` and tsconfig.test.json
+// excludes `src/__tests__`, so a `.ts` file here would silently never execute.
 
 import type { MentioraEvent } from '../index';
 import * as sdk from '../index';
 
-// `expect(typeof sdk.MentioraWidget).toBe('function')` proves nothing: a stub is a
-// function too. The stub is gone only if calling the surface does not throw.
+// A stub is a function too, so the surface has to be called, not type-checked.
 test('the stubs are gone: the surface no longer throws "not implemented"', () => {
   expect(() => sdk.Mentiora.close()).not.toThrow();
   expect(() =>
@@ -21,8 +19,7 @@ test('SDK_VERSION matches package.json — release.yml aborts if it does not', (
 });
 
 test('the surface is exactly the approved list — no internals, no test helpers', () => {
-  // Types erase at runtime, so this covers the value exports only. The type list is
-  // checked from outside the package by ci.yml's check.ts.
+  // Value exports only; ci.yml's check.ts covers the types from outside the package.
   expect(Object.keys(sdk).sort()).toEqual(
     ['Mentiora', 'MentioraHost', 'MentioraWidget', 'SDK_NAME', 'SDK_VERSION'].sort(),
   );
@@ -41,11 +38,8 @@ test('Mentiora carries exactly the four documented methods', () => {
   expect(Object.keys(sdk.Mentiora).sort()).toEqual(['close', 'configure', 'logout', 'open'].sort());
 });
 
-// `storageUnavailable`'s `reason` stays narrower than the internal `StorageReason`:
-// `'override'` and `'peer-loaded'` both mean storage works, so carrying them would
-// hand every consumer two switch arms that are dead by construction. A compile-time
-// assertion — `bun run typecheck` covers `src/__tests__`, and the `@ts-expect-error`
-// below fails the build if the union is widened back.
+// The public `reason` stays narrower than the internal `StorageReason`: `'override'`
+// and `'peer-loaded'` mean storage works, so they would be dead switch arms.
 test('storageUnavailable cannot carry a reason that means storage works', () => {
   const narrow: MentioraEvent = { type: 'storageUnavailable', reason: 'peer-absent' };
   // @ts-expect-error 'override' is not a StorageUnavailableReason

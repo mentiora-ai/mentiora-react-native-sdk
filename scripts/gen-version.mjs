@@ -1,6 +1,4 @@
-// Writes src/version.ts from package.json. The bridge contract requires
-// sdkVersion to match /^[0-9A-Za-z.+-]{1,64}$/, so it is validated here rather
-// than discovered at handshake time.
+// Writes src/version.ts from package.json, validating the contract's sdkVersion pattern here.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -7,10 +7,8 @@ export interface MentioraIdentityCallback {
   getToken: () => string | Promise<string>;
 }
 
-/**
- * Let the SDK fetch identity tokens. It decodes the JWT's `exp` without
- * verifying it, caches the token in memory and refreshes before expiry.
- */
+/** Let the SDK fetch identity tokens: it reads the JWT's `exp` without
+ *  verifying, caches the token in memory and refreshes before expiry. */
 export interface MentioraIdentityFetcher {
   endpoint: string;
   headers?: () => Record<string, string> | Promise<Record<string, string>>;
@@ -19,24 +17,11 @@ export interface MentioraIdentityFetcher {
 
 export type MentioraIdentity = MentioraIdentityCallback | MentioraIdentityFetcher;
 
-/**
- * Distinguishes a dead network from a page that loaded and never spoke.
- * Never shown to the user — the error screen renders the same sentence for
- * all three; the code is read by the host app through `onEvent`.
- */
+/** Read by the host app through `onEvent`; the error screen never shows it. */
 export type MentioraErrorCode = 'load_failed' | 'handshake_timeout' | 'renderer_crashed';
 
-/**
- * Why the SDK fell back to in-memory storage. Each value names a different
- * fix: install the optional AsyncStorage peer (`peer-absent`), pass `storage`
- * explicitly because this build cannot auto-resolve a peer at all
- * (`no-require`), or look at the store you passed (`load-threw`).
- *
- * Narrower than `storage.ts`'s internal `StorageReason`, whose extra
- * `'override'` and `'peer-loaded'` mean storage works and so can never
- * accompany a `storageUnavailable` event. Carrying them here would hand every
- * consumer two switch arms that are dead by construction.
- */
+/** Why the SDK fell back to in-memory storage: install the AsyncStorage peer
+ *  (`peer-absent`), pass `storage` (`no-require`), or fix yours (`load-threw`). */
 export type StorageUnavailableReason = 'peer-absent' | 'no-require' | 'load-threw';
 
 export type MentioraEvent =
@@ -45,14 +30,8 @@ export type MentioraEvent =
   | { type: 'identityError'; reason: string }
   | { type: 'openUrl'; url: string }
   | { type: 'error'; code: MentioraErrorCode }
-  /**
-   * No AsyncStorage and no `storage` override means the install id lives in
-   * memory, so every launch creates a new anonymous user with no thread
-   * continuity. The `__DEV__` warning alongside this is stripped from release
-   * bundles, where the failure otherwise shows up only as inflated anonymous
-   * user counts — hence an event as well. Emitted once per embed key, not
-   * once per presentation.
-   */
+  /** The install id lives in memory, so every launch is a new anonymous user.
+   *  Once per embed key; the paired `__DEV__` warning is release-stripped. */
   | { type: 'storageUnavailable'; reason: StorageUnavailableReason };
 
 /** Overrides the AsyncStorage default used to persist the install id. */
@@ -73,9 +52,7 @@ export interface MentioraConfig {
   /** Return true to take over. Default opens https:, mailto: and tel: via Linking. */
   onOpenUrl?: (url: string) => boolean;
   storage?: MentioraStorage;
-  /** Overrides the error screen's copy (the only chrome this SDK itself ever
-   *  draws — the hosted page draws everything else). An explicit `undefined`
-   *  on a key is ignored, falling back to the default for that key alone. */
+  /** Overrides the error screen's copy; an `undefined` key keeps its default. */
   strings?: Partial<MentioraStrings>;
 }
 

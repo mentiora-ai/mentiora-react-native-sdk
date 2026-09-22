@@ -1,19 +1,10 @@
 /**
- * Hand-written guards for every inbound (page → host) JSON-RPC message. No
- * zod: the package keeps zero runtime dependencies.
- *
- * Contract, enforced here:
- * - `id`, when present, is a non-empty string. A numeric id is invalid.
- * - `params` is required on requests and notifications, and a sender that
- *   omits it is read as `{}` rather than dropped — dropping hangs the
- *   sender's caller for its full 30s timeout. A response carries `params`
- *   too, since that is where `params.sessionKey` lives, and gets the same
- *   treatment: a page's response is itself a page → host message the
- *   session-key rule applies to.
- * - Unknown top-level fields are ignored; `parseInbound` copies out only the
- *   fields it recognises.
- * - A response carries an `id` plus exactly one of `result` or `error`, and
- *   never a `method`.
+ * Hand-written guards for every inbound (page → host) JSON-RPC message; no
+ * zod, the package keeps zero runtime dependencies. `id`, when present, is a
+ * non-empty string, never a number. `params` is required, but a missing one
+ * reads as `{}` rather than dropping, which would hang the sender for its
+ * full 30s timeout; a response carries it too, since `params.sessionKey`
+ * lives there. Unknown top-level fields are ignored.
  */
 
 export type JsonRpcId = string;
@@ -60,9 +51,7 @@ const isErrorPayload = (v: unknown): v is InboundErrorPayload =>
   Number.isInteger(v.code) &&
   typeof v.message === 'string';
 
-// Structural checks only. Run them on `parseInbound`'s normalised output,
-// not on a raw `postMessage` payload: they do not default a missing
-// `params`, only `parseInbound` does.
+// Structural only, and for `parseInbound`'s output: they do not default `params`.
 
 export function isRequest(v: unknown): v is InboundRequest {
   if (!isPlainObject(v)) return false;
@@ -94,16 +83,9 @@ export function isResponse(v: unknown): v is InboundResponse {
   return true;
 }
 
-/**
- * Parses a raw `onMessage` payload into a normalised {@link InboundMessage},
- * or `null` when it does not conform to the protocol.
- *
- * Rejects non-JSON, arrays, non-objects and non-2.0 envelopes, and requires
- * a non-empty string `id` when one is present. A missing `params` reads as
- * `{}` on requests, notifications and responses alike; a present but
- * malformed one rejects. Copies out only recognised fields, so an unknown
- * top-level field is ignored rather than a reason to reject.
- */
+/** Parses a raw `onMessage` payload into a normalised {@link InboundMessage},
+ *  or `null` when it does not conform. A response needs an `id` and exactly
+ *  one of `result`/`error`; a present but malformed `params` rejects. */
 export function parseInbound(raw: string): InboundMessage | null {
   let parsed: unknown;
   try {
@@ -123,7 +105,6 @@ export function parseInbound(raw: string): InboundMessage | null {
   const hasError = 'error' in parsed && parsed.error !== undefined;
 
   if (hasMethod) {
-    // A response never carries a method.
     if (hasResult || hasError) return null;
     if (!isNonEmptyString(parsed.method)) return null;
 
@@ -139,14 +120,11 @@ export function parseInbound(raw: string): InboundMessage | null {
     return { jsonrpc: '2.0', method: parsed.method, params };
   }
 
-  // No method: only a response is left.
   if (!hasId) return null;
   const id = parsed.id;
   if (typeof id !== 'string') return null;
   if (hasResult === hasError) return null; // exactly one of result / error
 
-  // A response's `params` is where `params.sessionKey` lives, and the
-  // session-key rule applies to page-sent responses too.
   const rawParams = parsed.params;
   if (rawParams !== undefined && !isJsonRpcParams(rawParams)) return null;
   const params: JsonRpcParams = isJsonRpcParams(rawParams) ? rawParams : {};

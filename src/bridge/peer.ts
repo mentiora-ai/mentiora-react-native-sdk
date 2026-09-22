@@ -1,31 +1,10 @@
 /**
- * The host side of the JSON-RPC 2.0 bridge (mobile bridge protocol v1). The
- * hosted page is the client and sends every request; this peer answers.
- *
- * `receive` checks in this order:
- * 1. `parseInbound`. `null` answers `-32600` when the raw text carried a
- *    string `id`, otherwise drops.
- * 2. `mentiora/initialize`: a request only (an id-less notification is
- *    dropped and never spends the latch); params are validated first, then
- *    the latch, which is reserved before the handler is awaited. No
- *    session-key comparison, and whatever `protocolVersion` the handler
- *    returns is forwarded as-is.
- * 3. Every other message: `params.sessionKey` must equal the stored key. A
- *    mismatch answers `-32001` when the message has an `id`; an id-less one
- *    is dropped with a `warn`, because JSON-RPC cannot answer a message
- *    with no id — a deviation from the wire contract, which asks for
- *    `-32001` on notifications too.
- * 4. Route by method. Unknown ⇒ `-32601`. Bad params ⇒ `-32602`. A
- *    handler that throws ⇒ `-32603`.
- *
- * Every outbound message carries `params.sessionKey` once a session exists,
- * error responses included.
- *
- * `resetLoad` bumps a generation counter and clears the latch and session
- * key. A `receive` captures the generation on entry and, once it no longer
- * matches, neither mutates state nor sends: an `initialize` awaiting the
- * page's random bytes would otherwise answer into the replacement page or
- * overwrite its session key.
+ * Host side of the JSON-RPC 2.0 bridge (mobile bridge protocol v1); the page
+ * is the client and sends every request. `receive`: `parseInbound` (`-32600`
+ * if a string `id` survived, else drop) → `mentiora/initialize`, a request
+ * only, params then a one-shot latch, no session-key check → all else must
+ * carry `params.sessionKey` (`-32001`; id-less dropped, a deviation) → route
+ * `-32601`/`-32602`/`-32603`. Outbound messages carry the key, errors too.
  */
 
 import {
@@ -56,16 +35,10 @@ export type HostHandlers = {
   onBackHandling: (active: boolean) => void;
 };
 
-/**
- * A handler error that names its own JSON-RPC code. Any other throw becomes
- * `-32603`, leaving the protocol's `-32003` (URL denied) and `-32002`
- * (identity unavailable) unreachable, so the composition root labels the
- * throw and the peer need not know those domains.
- *
- * `message` reaches the page verbatim, unlike the generic `-32603` answer, so
- * it must be a fixed literal — never an upstream error's text, a URL or a
- * token.
- */
+/** A handler error naming its own JSON-RPC code, so the composition root can
+ *  reach `-32003` (URL denied) and `-32002` (identity unavailable); anything
+ *  else becomes `-32603`. `message` reaches the page verbatim, so it must be a
+ *  fixed literal — never an upstream error's text, a URL or a token. */
 export class BridgeError extends Error {
   readonly code: ErrorCode;
   constructor(code: ErrorCode, message: string) {
@@ -82,9 +55,8 @@ export type HostPeer = {
   sessionKey: () => string | null;
 };
 
-// Best-effort id extraction for a payload that failed `parseInbound`, used
-// only to decide whether the parse failure is answerable at all. Validated
-// no further than "a non-empty string".
+// Best-effort id for a payload that failed `parseInbound`, only to decide
+// whether the failure is answerable. Validated no further than non-empty.
 const extractRawId = (raw: string): string | undefined => {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -111,6 +83,8 @@ export const createHostPeer = (deps: {
   const { send, handlers } = deps;
   const warn = deps.warn ?? (() => {});
 
+  // `resetLoad` bumps this; a `receive` whose captured value no longer matches
+  // neither mutates nor sends, or a slow `initialize` answers the next page.
   let generation = 0;
   let initializeLatch = false;
   let currentSessionKey: string | null = null;
@@ -129,8 +103,7 @@ export const createHostPeer = (deps: {
     send(JSON.stringify(withSessionParams({ jsonrpc: '2.0', id, error })));
   };
 
-  // JSON-RPC has no envelope for a reply with no id, so an id-less message
-  // is warned about and dropped rather than answered.
+  // JSON-RPC has no envelope for a reply with no id: warn and drop.
   const respondOrDrop = (
     id: string | undefined,
     code: number,
@@ -154,8 +127,7 @@ export const createHostPeer = (deps: {
     }
 
     if (!('method' in message)) {
-      // A response carries an id, so it is answerable, but there is nothing
-      // to route it to — only the session key applies.
+      // A response is answerable but routes nowhere; only the key applies.
       const providedKey = message.params?.sessionKey;
       if (currentSessionKey === null || providedKey !== currentSessionKey) {
         respondOrDrop(message.id, ErrorCode.unauthorized, 'Unauthorized', {

@@ -1,8 +1,4 @@
-// Recomputes the sha256 of every vendored bridge fixture and compares it
-// against src/bridge/v1/fixtures.lock.json. The fixtures are copied verbatim
-// from mentiora-cx and are immutable upstream, so any difference — a changed
-// file, a missing one, or one present on disk but never locked — is a bug in
-// this repo, not upstream. Exits non-zero and names every offending file.
+// The vendored bridge fixtures are immutable upstream: any sha256 drift from fixtures.lock.json is a bug here.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

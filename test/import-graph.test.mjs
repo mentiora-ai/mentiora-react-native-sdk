@@ -1,8 +1,5 @@
-// `scripts/check-import-graph.mjs` is what the consumer-install job leans on to
-// prove a packed tarball works under npm. The `require.resolve` /
-// `import.meta.resolve` checks beside it resolve the entry files without
-// evaluating them or walking their imports, so on their own they pass a runtime
-// import that is missing from `peerDependencies`.
+// `check-import-graph.mjs` proves a packed tarball works under npm: the resolve
+// checks beside it never walk imports, so they pass a missing peer.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -12,8 +9,6 @@ import { test } from 'node:test';
 
 const script = new URL('../scripts/check-import-graph.mjs', import.meta.url).pathname;
 
-/** A throwaway consumer with `installed` present in node_modules, and a lib
- *  directory whose single file is `source`. */
 const tree = (source, installed = ['installed-peer']) => {
   const root = mkdtempSync(join(tmpdir(), 'import-graph-'));
   const lib = join(root, 'lib');
@@ -45,8 +40,7 @@ test('rejects an eager import of a package the consumer does not have', () => {
 });
 
 test('rejects an eager import of a deliberately absent OPTIONAL peer', () => {
-  // The absent path is the one that breaks: the consumer job installs no
-  // react-native-safe-area-context on purpose.
+  // The consumer job installs no safe-area-context; the absent path is the one that breaks.
   const { root, lib } = tree("export { a } from 'optional-peer';\n");
   assert.throws(() => run(lib, root), /optional-peer/);
 });

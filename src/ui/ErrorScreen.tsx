@@ -10,20 +10,13 @@ export type ErrorScreenProps = {
   onDismiss: () => void;
 };
 
-/**
- * Covers a dead WebView. The hosted page draws its own chrome, so when it
- * never loads there is no close control anywhere else — Dismiss is the only
- * way out of the customer's app, not an optional affordance.
- *
- * `code` is not shown: all three MentioraErrorCode values render the same
- * plain-English `errorBody`. The code is for the host app, via `onEvent`.
- */
+/** Covers a dead WebView. The hosted page draws its own chrome, so Dismiss is
+ *  the only way out of the customer's app. `code` is not shown — all three
+ *  values render the same `errorBody`; it reaches the host via `onEvent`. */
 export function ErrorScreen(props: ErrorScreenProps): React.JSX.Element {
   const { strings, onRetry, onDismiss } = props;
-  // A `{ ...DEFAULT_STRINGS, ...strings }` spread would let an explicit
-  // `undefined` (e.g. `strings={{ retry: cond ? 'x' : undefined }}`) blank a
-  // control's label, on the one screen whose only exit must stay visible.
-  // Keys the caller set to undefined are skipped rather than applied.
+  // Not a spread: an explicit `undefined` would blank a control's label on the
+  // one screen whose only exit must stay visible.
   const s = { ...DEFAULT_STRINGS };
   for (const key of Object.keys(DEFAULT_STRINGS) as (keyof MentioraStrings)[]) {
     const value = strings?.[key];

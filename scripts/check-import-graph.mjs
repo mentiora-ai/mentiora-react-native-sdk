@@ -1,17 +1,7 @@
-// Walks a built `lib/` for the external modules it EAGERLY imports, and
-// asserts every one of them resolves from a consumer's own install.
-//
-// `require.resolve()` / `import.meta.resolve()` on the package entry prove only
-// that the entry file exists: neither evaluates it, neither walks its imports.
-// Evaluating it is not an option either — an RN entry pulls in Flow-typed
-// `react-native` source that bare node cannot parse. Reading the import graph is
-// what catches a runtime import missing from `peerDependencies`, or an eager
-// import of an optional peer a consumer is allowed not to install.
-//
-// ESM build only: `import`/`export … from` are statements, so everything found
-// here runs at load time. A lazily `require()`d optional peer (async-storage in
-// storage.ts, safe-area-context in MentioraWidget.tsx) is try/catch-guarded by
-// design and correctly not flagged; the same import written top-level would be.
+// Asserts every module a built `lib/` eagerly imports resolves from a consumer's
+// install: a runtime import missing from `peerDependencies`, or an eager import of
+// an optional peer, passes every other check. ESM build only, so a lazily
+// `require()`d optional peer is correctly not flagged.
 
 import { readFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';

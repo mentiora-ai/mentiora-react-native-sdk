@@ -1,14 +1,6 @@
-// Collects compiled core tests (lib-test/**/*.test.js) plus the standalone
-// scripts under test/**/*.test.mjs and runs them all through node --test.
-//
-// The guard catches emit loss: a `src/**/*.test.ts(x)` source with no counterpart
-// under lib-test. Without it, a glob that matches zero emitted files reports a
-// pass. It pairs per file rather than counting, because a tsconfig change that
-// drops all but one test file still satisfies a "more than zero" check and runs a
-// silent subset. Zero core test sources is a legitimate state. `src/__tests__` is
-// excluded: it belongs to Jest and tsconfig.test.json excludes it, so it has no
-// counterpart by design. `bun run test:core` removes lib-test first, so a deleted
-// source cannot leave a stale .js behind to be run or to satisfy the pairing.
+// Runs lib-test/**/*.test.js plus test/**/*.test.mjs through node --test. The guard
+// catches emit loss: a glob matching zero emitted files reports a pass, and a count
+// check survives a tsconfig change dropping all but one. `src/__tests__` is Jest's.
 import { spawnSync } from 'node:child_process';
 import { glob } from 'node:fs/promises';
 import { dirname, join } from 'node:path';

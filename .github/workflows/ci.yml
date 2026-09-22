@@ -16,14 +16,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      # Renovate rewrites these tags to pinned digests on its first run
-      # (pinDigests: true in renovate.json).
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      # bun run test shells out to `node --test`, and the pack step below uses
-      # npm; both would otherwise run on the runner's ambient Node.
+      # `bun run test` shells out to `node --test` and pack uses npm; without
+      # this both run on the runner's ambient Node.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -41,17 +39,8 @@ jobs:
       - run: bunx publint --strict
       - run: bunx attw --pack .
 
-      # Catches junk landing in the tarball (a stray build dir, node_modules,
-      # a committed fixture corpus) — not a compression target. The 100KB
-      # scaffold number predated the implementation and is unreachable: the
-      # real package is ~120KB, and `files` ships `src` alongside `lib` on
-      # purpose (scaffold.md, "package.json": source maps and debugging), so
-      # even dropping every .map leaves it at ~101KB.
-      #
-      # BOTH numbers, because npm's `size` is the COMPRESSED tarball length
-      # (external review, m3): a corpus of highly compressible junk moves it
-      # barely at all, while it is what a consumer actually unpacks that the
-      # budget is about. `unpackedSize` is ~640KB today; 800KB is the ceiling.
+      # Catches junk in the tarball, not compression. npm's `size` is the
+      # compressed length, so both are checked: ~120KB packed, ~640KB unpacked.
       - name: tarball size budget
         run: |
           npm pack --ignore-scripts --dry-run --json > /tmp/pack.json
@@ -61,12 +50,8 @@ jobs:
           [ "$SIZE" -lt 153600 ] || { echo "package exceeds the 150KB compressed budget"; exit 1; }
           [ "$UNPACKED" -lt 819200 ] || { echo "package exceeds the 800KB unpacked budget"; exit 1; }
 
-  # Installs the packed tarball with npm, at the low end of every peer range.
-  # bun and npm hoist and resolve differently, so this is what proves a consumer
-  # on npm gets a working package: a wrong peer range fails at install time, a
-  # phantom or eagerly-imported optional peer fails the import-graph check, and
-  # the public types are compiled from outside the package by the consumer's
-  # own tsc.
+  # Installs the packed tarball under npm at the peer floor. bun and npm hoist
+  # differently, so only this proves an npm consumer gets a working package.
   consumer-install:
     runs-on: ubuntu-latest
     steps:
@@ -87,11 +72,8 @@ jobs:
           TARBALL="$PWD/$(ls mentiora-react-native-sdk-*.tgz)"
           mkdir -p /tmp/consumer && cd /tmp/consumer
           npm init -y >/dev/null
-          # react-native-safe-area-context is deliberately absent: it is an
-          # optional peer and the absent path is the one that breaks.
-          # @types/react is not a peer of ours, but the emitted .d.ts names
-          # React.JSX.Element, so check.ts below cannot resolve `react` without
-          # it. Pinned to the major that matches the react floor.
+          # safe-area-context is deliberately absent: the optional-peer path is
+          # the one that breaks. check.ts needs @types/react for React.JSX.Element.
           npm install --no-audit --no-fund \
             "$TARBALL" \
             react@18 \
@@ -101,13 +83,8 @@ jobs:
             @types/react@18 \
             typescript@6.0.3
 
-      # Resolution, not evaluation: an RN entry pulls in Flow-typed react-native
-      # source that bare node cannot parse, so `node -e "require('react-native')"`
-      # is a SyntaxError whatever the package does. Resolution alone proves
-      # only that the entry files exist — it neither evaluates them nor walks
-      # their imports — so the import-graph check below is what actually covers
-      # a runtime import missing from `peerDependencies`, or an eager import of
-      # the deliberately-absent optional safe-area peer.
+      # Resolution cannot evaluate an RN entry (Flow source, SyntaxError under
+      # bare node), so only this walk catches a missing or eager peer import.
       - name: every eager import resolves from the consumer install
         run: |
           node "$GITHUB_WORKSPACE/scripts/check-import-graph.mjs" \
@@ -117,19 +94,11 @@ jobs:
       - name: resolve both entries and the public types
         run: |
           cd /tmp/consumer
-          # What must hold here is that both conditions resolve to files that
-          # exist, and that the ESM .d.ts typechecks under a consumer's own tsc.
-          # `--module esnext --moduleResolution bundler` only ever takes the
-          # "import" condition, so lib/module/index.d.ts is the ONLY one check.ts
-          # below exercises; the CJS .d.ts is covered by `attw --pack .` in the
-          # `check` job, which walks every condition in the exports map.
+          # check.ts only exercises the ESM .d.ts; `attw --pack .` covers the CJS one.
           node -e "const p=require.resolve('@mentiora/react-native-sdk'); if(!/lib\/commonjs\/index\.js$/.test(p)) throw new Error('require resolved to '+p); console.log('cjs ok', p)"
           node --input-type=module -e "const u = await import.meta.resolve('@mentiora/react-native-sdk'); if(!/lib\/module\/index\.js$/.test(u)) throw new Error('import resolved to '+u); console.log('esm ok', u)"
-          # Names EVERY exported type, from OUTSIDE the package, where a missing
-          # export is a TS2305 rather than something only ../index can see. The
-          # negative cases at the bottom matter as much as the positive ones: a
-          # union accidentally widened to `string` passes every positive check
-          # above and nothing else in the repo would notice.
+          # Names every exported type from outside the package, so a missing one
+          # is a TS2305. The negative cases catch a union widened to `string`.
           cat > check.ts <<'TS'
           import type {
             MentioraConfig,
@@ -160,8 +129,6 @@ jobs:
           const code: MentioraErrorCode = 'handshake_timeout';
           const reason: StorageUnavailableReason = 'peer-absent';
 
-          // Every variant, so a dropped or renamed one is a compile error here
-          // rather than a surprise in a customer's switch statement.
           const events: MentioraEvent[] = [
             { type: 'ready' },
             { type: 'close' },

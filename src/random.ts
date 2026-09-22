@@ -1,52 +1,27 @@
 /**
- * Random bytes sourced from the page's WebCrypto, bounded at 2s. React Native
- * has no global WebCrypto and `Math.random` is not a CSPRNG, so the host
- * injects a script that calls `crypto.getRandomValues` inside the WebView and
- * posts the bytes back. Those bytes become the bridge session key (16 bytes)
- * and, on first launch, the install id (16 more).
- *
- * `globalCrypto` is an injectable seam for a host app that has polyfilled
- * WebCrypto, and for tests; React Native has no global `crypto`, so it is not
- * a production path. When present it skips the round trip.
- *
- * One request in flight at a time: `bytes()` is only called during the
- * handshake, so a second call while one is pending rejects rather than
- * queuing — there is no request/response correlator here.
- *
- * A reply is authenticated by a PER-REQUEST NONCE, never by the tag alone.
- * The tag is a module constant, so anything that can reach
- * `window.ReactNativeWebView.postMessage` — including the page's sandboxed
- * custom-block iframe, which is who the session key defends the host against
- * — could otherwise spell it, hand back 16 chosen bytes and so pick the
- * session key and the install id. The nonce goes out inside the injected
- * script, which runs in the main frame only, and comes back in the reply; a
- * sub-frame sees neither and cannot spell one. Unguessable rather than merely
- * unique: `Math.random` is not a CSPRNG, but this generator lives in the React
- * Native JS realm, whose stream nothing on the page side can observe or seed —
- * and a CSPRNG here would remove the round trip it protects. The counter only
- * guarantees non-repetition.
+ * Random bytes from the page's WebCrypto, bounded at 2s. React Native has no
+ * global WebCrypto, so the host injects a script calling `getRandomValues` in
+ * the WebView; the bytes become the session key and the install id.
+ * Replies are authenticated by a per-request nonce, not the module-constant
+ * tag any frame can spell — chosen bytes mean a chosen session key. The nonce
+ * ships inside the injected script, which runs in the main frame only.
  */
 
 export type RandomSource = {
-  /** Resolves exactly `count` cryptographically random bytes. Callers ask for 16 at a
-   *  time: once for the session key, once more for an install id if one is needed. */
+  /** Exactly `count` cryptographically random bytes (callers ask for 16). One
+   *  request in flight: a second call while one is pending rejects. */
   bytes: (count: number) => Promise<Uint8Array>;
   /** Called by the component's onMessage router BEFORE the JSON-RPC parser. */
   acceptReply: (raw: string) => boolean;
-  /** Invalidates the parked resolver, if any, at a load boundary. The request
-   *  belongs to a document that no longer exists and its reply can never
-   *  arrive, but `pending` would otherwise stay non-null for the rest of its
-   *  2 s timeout — and the replacement page's `initialize` then hits "already
-   *  in flight" on its first line and is answered `-32603`, poisoning the one
-   *  handshake meant to be the recovery. */
+  /** Invalidates the parked resolver at a load boundary; left pending, it
+   *  fails the replacement page's `initialize` `-32603` on "already in flight". */
   reset: () => void;
 };
 
 export const RANDOM_REPLY_TAG = '__mentiora_random__';
 
 let nonceCounter = 0;
-/** Per-request, non-repeating, and unpredictable from the page side (see the
- *  file header). Not exported: nothing outside this module may mint one. */
+/** Per-request, non-repeating, unpredictable from the page side. Not exported. */
 const newNonce = (): string =>
   `${++nonceCounter}.${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 
@@ -64,11 +39,8 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const clearTimer =
     deps.clearTimer ?? ((h: unknown) => clearTimeout(h as Parameters<typeof clearTimeout>[0]));
-  // ponytail: no ambient-global sniffing here — React Native has no global
-  // `crypto`, and this codebase's Node-based test runner does (WebCrypto has
-  // been a Node global since v19), so reaching for `globalThis.crypto` would
-  // silently take the fast path in tests that never pass `globalCrypto` and
-  // expect the inject path. Callers that have a polyfill pass it explicitly.
+  // ponytail: injected seam for a host polyfill, never sniffed from
+  // `globalThis` — Node's test runner has `crypto` and would skip the inject.
   const globalCrypto = deps.globalCrypto;
 
   let pending: {
@@ -126,12 +98,8 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     if (obj.tag !== RANDOM_REPLY_TAG) return false;
 
     const current = pending;
-    // The nonce is the whole authentication: no pending request, or a nonce
-    // that is not THIS request's, means the message is not ours, so fall
-    // through to the JSON-RPC parser rather than resolving, rejecting or
-    // freeing the pending request on a stranger's say-so. A stale reply from a
-    // superseded document lands here too and must not answer the replacement
-    // page's request.
+    // The nonce is the whole authentication; anything else — a stale reply
+    // included — falls through untouched to the JSON-RPC parser.
     if (!current || obj.nonce !== current.nonce) return false;
 
     pending = null;

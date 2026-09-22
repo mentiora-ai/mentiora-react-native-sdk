@@ -81,8 +81,7 @@ test('totalBudgetMs stops delays early, not truncated', () => {
     totalBudgetMs: 5000,
   };
   const d = delaysFor(budgetPolicy, () => 1);
-  // i=0: uncapped=3000, capped=3000, jittered=3000, spent=0, 0+3000<=5000? yes, push 3000
-  // i=1: uncapped=6000, capped=6000, jittered=6000, spent=3000, 3000+6000<=5000? no, break
+  // 3000 fits the 5000 budget; the next 6000 does not, so the schedule stops.
   assert.deepEqual(d, [3000]);
 });
 
@@ -104,8 +103,7 @@ test('sleep is called between attempts with exact delay values', async () => {
     /fail/,
   );
 
-  // 3 attempts = 2 sleeps (after attempt 1 and 2, not after attempt 3)
+  // 3 attempts = 2 sleeps; baseMs=1000, capMs=8000, random=1 gives [1000, 2000].
   assert.equal(sleepCalls.length, 2);
-  // With baseMs=1000, capMs=8000, random=1: delays are [1000, 2000]
   assert.deepEqual(sleepCalls, [1000, 2000]);
 });
