@@ -168,6 +168,17 @@ export const createIdentityProvider = (deps: {
   // It is never handed to `storage`.
   let cache: { token: string; expMs: number } | undefined;
 
+  // Bumped SYNCHRONOUSLY at the top of `clear()` (external review, B2). An
+  // acquisition is a long chain of awaits — the retry ladder, `fetch`, a retry
+  // sleep, response parsing — and a `logout()` landing anywhere inside it used
+  // to be undone the moment the chain resumed: `mintToken` wrote `cache` and
+  // the `wasSignedIn` marker unconditionally, so the next boot reused a
+  // pre-logout token. Every acquisition captures this on entry and re-checks
+  // it before each write and before returning; a mismatch means the token it
+  // is holding belongs to a user who has since logged out, and it is dropped
+  // rather than published.
+  let generation = 0;
+
   const isFresh = (floorMs: number): boolean =>
     cache !== undefined && now() < cache.expMs - floorMs;
 
@@ -186,12 +197,17 @@ export const createIdentityProvider = (deps: {
   };
 
   const mintToken = async (policy: RetryPolicy, id: MentioraIdentity): Promise<string> => {
+    const myGen = generation;
+    const cleared = (): boolean => generation !== myGen;
+
     let raw: string;
     try {
       raw = await retry(() => fetchRawToken(id), policy, deps.sleep, deps.random);
     } catch (err) {
       throw new IdentityUnavailable(err instanceof Error ? err.message : 'identity fetch failed');
     }
+
+    if (cleared()) throw new IdentityUnavailable('identity cleared while the token was in flight');
 
     const payload = decodePayload(raw);
     const exp = typeof payload?.exp === 'number' ? payload.exp : null;
@@ -203,10 +219,19 @@ export const createIdentityProvider = (deps: {
     cache = exp !== null ? { token: raw, expMs: exp * 1000 } : undefined;
 
     try {
+      // Re-checked after the await too: `setItem` can resolve after a logout
+      // that started while it was pending, and a marker set on a logged-out
+      // install is a boot deadlock (`initial()` throws on it forever).
       await storage.setItem(wasSignedInKey(embedKey), '1');
+      if (cleared()) await storage.removeItem(wasSignedInKey(embedKey));
     } catch {
       // A failed flag write must not fail a successful boot/refresh — the
       // caller already has a token. Nothing else in this function swallows.
+    }
+
+    if (cleared()) {
+      cache = undefined;
+      throw new IdentityUnavailable('identity cleared while the token was in flight');
     }
 
     return raw;
@@ -240,6 +265,8 @@ export const createIdentityProvider = (deps: {
   };
 
   const clear = async (): Promise<void> => {
+    // Before any await, so an acquisition that resumes later sees it.
+    generation += 1;
     cache = undefined;
     await storage.removeItem(wasSignedInKey(embedKey));
   };

@@ -131,8 +131,32 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       // to land before it reads storage. `rotation` is assigned before the
       // first await, so it is already visible to anything that calls
       // `installId()` after `logout()` returns its promise.
+      // The provider that is live RIGHT NOW is the one whose in-flight
+      // acquisitions this logout has to invalidate (external review, B2).
+      // Captured before the first await, because `getRuntime` can swap
+      // `runtime.identity` out from under us while the rotation is in flight —
+      // reading it only at the end would leave the provider that was actually
+      // minting during the logout outside the logout, free to write its token
+      // and the `wasSignedIn` marker back afterwards. The one live at the end
+      // is cleared too, below.
+      const clearing = runtime.identity;
+      // The PRIOR mint has to settle before the delete, not merely be dropped
+      // (external review, B3). A `loadOrCreateInstallId` that has already
+      // minted an id and is blocked in `storage.setItem` would otherwise commit
+      // AFTER `removeItem`, so the pre-logout id survives its own rotation —
+      // or, if a post-logout widget has meanwhile minted its own, the two
+      // surfaces end up on two different anonymous users. Settle, not succeed:
+      // a failed mint still cannot be racing us once it has rejected.
+      //
+      // Nothing bounds that wait. A `setItem` that never settles blocks the
+      // logout, which is the correct direction: the alternative is deleting
+      // while a write is still live, which is the bug.
+      const prior = inFlight;
       inFlight = undefined;
-      const rotating = rotateInstallId({ storage, embedKey });
+      const rotating = (async () => {
+        await prior?.catch(() => undefined);
+        await rotateInstallId({ storage, embedKey });
+      })();
       // What mints park on is deliberately NOT `rotating` itself. They need to
       // wait for the rotation to finish; they must not inherit its failure. A
       // `removeItem` that rejects (a full or corrupt SQLite file under
@@ -159,7 +183,12 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       // rejection must reach the caller rather than being swallowed — a
       // swallowed failure here would leave the flag set on a now-anonymous
       // install, which is a boot deadlock per identity.ts's `initial()`.
-      await runtime.identity.clear();
+      await clearing.clear();
+      // A provider swapped in mid-logout (`getRuntime`, last-config-wins) is
+      // inside this logout too: it may already have been asked for a token by
+      // a widget that reads `runtime.identity` live.
+      const live = runtime.identity;
+      if (live !== clearing) await live.clear();
       for (const fn of subscribers) fn();
     },
   };

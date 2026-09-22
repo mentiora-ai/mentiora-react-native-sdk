@@ -13,7 +13,7 @@ import {
   type MockWebViewRef,
 } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
-import { RANDOM_REPLY_TAG } from '../random';
+import { RANDOM_REPLY_TAG, toBase64Url } from '../random';
 import { __resetRuntimes, getRuntime } from '../runtime';
 import { SDK_NAME, SDK_VERSION } from '../version';
 
@@ -48,12 +48,27 @@ const waitForSent = (n: number): Promise<void> =>
     expect(sent().length).toBeGreaterThanOrEqual(n);
   });
 
-// The page's side of Task 5's random handshake. Only reached when the host has no
-// WebCrypto of its own; under Jest `globalThis.crypto` exists, so the composition
-// root passes it as `globalCrypto` and this is a stray message the router swallows.
-const answerRandom = (el: ReturnType<typeof screen.getByTestId>, count = 16) =>
+// The scripts that are random-bytes REQUESTS, newest last.
+const randomScripts = (): string[] => scripts().filter((s) => s.includes(RANDOM_REPLY_TAG));
+
+// Each request carries its own nonce (random.ts, external review B1) and only a
+// reply echoing it counts — the tag alone is a module constant anything that can
+// postMessage could spell.
+const nonceOf = (script: string): string => {
+  const m = /,k="([^"]+)"/.exec(script);
+  if (!m) throw new Error('the injected random script carries no nonce');
+  return m[1] as string;
+};
+
+const answerLastRandom = (el: ReturnType<typeof screen.getByTestId>, count = 16) =>
   fireEvent(el, 'message', {
-    nativeEvent: { data: JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(count).fill(7) }) },
+    nativeEvent: {
+      data: JSON.stringify({
+        tag: RANDOM_REPLY_TAG,
+        nonce: nonceOf(randomScripts().at(-1) as string),
+        bytes: Array(count).fill(7),
+      }),
+    },
   });
 
 const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion = 1) =>
@@ -96,7 +111,6 @@ test('the library origin whitelist is opened so our matcher is the only gate', a
 test('answers initialize with OUR protocol version and a session key', async () => {
   const el = await mount();
   await initialize(el);
-  await answerRandom(el);
   await waitForSent(1);
   const reply = sent().at(-1) as { result?: Record<string, unknown> };
   expect(reply.result?.protocolVersion).toBe(1);
@@ -113,7 +127,6 @@ test('answers initialize with OUR protocol version and a session key', async () 
 test('an unsupported protocolVersion still gets a result, never -32005', async () => {
   const el = await mount();
   await initialize(el, 99);
-  await answerRandom(el);
   await waitForSent(1);
   const reply = sent().at(-1) as { result?: Record<string, unknown>; error?: unknown };
   expect(reply.error).toBeUndefined();
@@ -134,15 +147,65 @@ test('the random reply is taken by the router and never reaches the peer', async
   // string `id` to answer into, and `respondOrDrop` warns and drops. The peer's
   // `warn` is the only positive evidence of whether it saw the message at all,
   // and this component routes it to `console.warn` under __DEV__.
+  const real = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     const el = await mount();
-    await answerRandom(el);
+    await initialize(el);
+    await waitFor(() => {
+      expect(randomScripts()).toHaveLength(1);
+    });
+    await answerLastRandom(el);
     expect(warn).not.toHaveBeenCalled();
-    expect(sent()).toHaveLength(0);
-    expect(scripts()).toHaveLength(0);
   } finally {
     warn.mockRestore();
+    Object.defineProperty(globalThis, 'crypto', { value: real, configurable: true });
+  }
+});
+
+// External review, B1. The reply used to be authenticated on `obj.tag` alone —
+// a module constant — so the page's sandboxed custom-block iframe, the one
+// party the session key exists to defend the host against (design.md:172),
+// could answer the host's pending request with 16 bytes of its own choosing and
+// pick both the session key and the install id. The nonce lives in the injected
+// script, which runs in the main frame only.
+test('a tagged reply with the wrong nonce cannot choose the session key', async () => {
+  const real = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const el = await mount();
+    await initialize(el);
+    await waitFor(() => {
+      expect(randomScripts()).toHaveLength(1);
+    });
+
+    // The attacker's 16 zero bytes, with the tag it can read off any bundle.
+    await fireEvent(el, 'message', {
+      nativeEvent: {
+        data: JSON.stringify({ tag: RANDOM_REPLY_TAG, nonce: 'guessed', bytes: Array(16).fill(0) }),
+      },
+    });
+    expect(sent()).toHaveLength(0);
+    // Declined by the router, so it fell through to the peer, which dropped it
+    // id-less — positive evidence that it was NOT treated as our reply.
+    expect(warn).toHaveBeenCalled();
+
+    // The real page still completes the handshake, and the key is not the
+    // attacker's all-zero one.
+    await answerLastRandom(el);
+    await waitFor(() => {
+      expect(randomScripts().length).toBeGreaterThanOrEqual(2);
+    });
+    await answerLastRandom(el);
+    await waitForSent(1);
+    const reply = sent().at(-1) as { result?: Record<string, unknown> };
+    expect(reply.result?.sessionKey).toEqual(expect.any(String));
+    expect(reply.result?.sessionKey).not.toBe(toBase64Url(new Uint8Array(16)));
+  } finally {
+    warn.mockRestore();
+    Object.defineProperty(globalThis, 'crypto', { value: real, configurable: true });
   }
 });
 
@@ -156,11 +219,11 @@ test('without host WebCrypto the session key comes from the page, over two round
     await waitFor(() => {
       expect(scripts().length).toBeGreaterThanOrEqual(1);
     });
-    await answerRandom(el);
+    await answerLastRandom(el);
     await waitFor(() => {
       expect(scripts().length).toBeGreaterThanOrEqual(2);
     });
-    await answerRandom(el);
+    await answerLastRandom(el);
     await waitForSent(1);
     const reply = sent().at(-1) as { result?: Record<string, unknown> };
     expect(typeof reply.result?.sessionKey).toBe('string');
@@ -280,7 +343,6 @@ test('onOpenWindow routes through the same external gate', async () => {
 test('a mailto link opens via Linking; a javascript: link is refused with -32003', async () => {
   const el = await mount();
   await initialize(el);
-  await answerRandom(el);
   await waitForSent(1);
   const key = (sent().at(-1) as { result: { sessionKey: string } }).result.sessionKey;
   const call = (id: string, url: string) =>
@@ -389,7 +451,6 @@ test('two widgets on one embed key share a runtime and mint ONE install id', asy
   expect(els).toHaveLength(2);
   for (const el of els) {
     await initialize(el);
-    await answerRandom(el);
   }
   // Read BOTH WebViews: `sent()` alone sees only the last one, and one result can
   // never disagree with itself.

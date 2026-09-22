@@ -362,3 +362,127 @@ test('a removeItem failure during logout does not poison every later install-id 
   assert.equal(await rt.installId(bytes), before);
   assert.equal(await rt.installId(bytes), before);
 });
+
+// --- External review, B3 ---
+//
+// `logout()` dropped `inFlight` and rotated WITHOUT waiting for the mint that
+// was already running. A `loadOrCreateInstallId` that had minted an id and was
+// blocked in `storage.setItem` therefore committed AFTER `removeItem`: the
+// pre-logout id survived its own rotation, or — with a post-logout widget
+// minting its own — the two surfaces ended up on two different anonymous users.
+test('a pre-logout install-id write cannot land after the rotation deleted it', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  const order: string[] = [];
+  let releaseWrite!: () => void;
+  const written = new Promise<void>((r) => {
+    releaseWrite = r;
+  });
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      await written; // the mint is blocked here when logout starts
+      if (k.includes('installId')) order.push('setItem');
+      store.set(k, v);
+    },
+    // The identity provider removes its own key here too; only the install id
+    // is what this test is about.
+    removeItem: async (k: string) => {
+      if (k.includes('installId')) order.push('removeItem');
+      store.delete(k);
+    },
+  };
+
+  const rt = getRuntime({ ...cfg('b3'), storage });
+  const minting = rt.installId(bytes); // parked inside setItem
+
+  const loggingOut = rt.logout();
+  releaseWrite();
+  await minting;
+  await loggingOut;
+
+  assert.deepEqual(order, ['setItem', 'removeItem'], 'the delete must come last');
+  assert.equal(store.size, 0, 'nothing may survive the rotation');
+
+  // And the next widget mints a genuinely new id rather than reading the
+  // previous user's write back out of storage.
+  const after = await rt.installId(bytes);
+  assert.notEqual(after, await minting);
+});
+
+test('a rejecting pre-logout mint still lets the rotation through (settle, not succeed)', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  let failWrite!: (e: Error) => void;
+  const blocked = new Promise<void>((_res, rej) => {
+    failWrite = rej;
+  });
+  blocked.catch(() => undefined);
+  let firstWrite = true;
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      if (firstWrite) {
+        firstWrite = false;
+        await blocked; // the pre-logout mint, which never commits
+      }
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      store.delete(k);
+    },
+  };
+  const rt = getRuntime({ ...cfg('b3-fail'), storage });
+  const minting = rt.installId(bytes);
+  minting.catch(() => undefined);
+
+  const loggingOut = rt.logout();
+  failWrite(new Error('disk full'));
+  await loggingOut; // must not hang, and must not inherit the failure
+  assert.ok(await rt.installId(bytes));
+});
+
+// --- External review, B2 (the swap half) ---
+//
+// `logout()` read `runtime.identity` only at the end. A `getRuntime()` that
+// swapped the provider while the rotation was in flight therefore left the
+// provider that was actually minting during the logout outside the logout,
+// free to write its token and the `wasSignedIn` marker back afterwards.
+test('a provider swapped in mid-logout is inside the logout, and so is the old one', async () => {
+  __resetRuntimes();
+  const store = new Map<string, string>();
+  let land!: () => void;
+  const landed = new Promise<void>((r) => {
+    land = r;
+  });
+  const storage = {
+    getItem: async (k: string) => store.get(k) ?? null,
+    setItem: async (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: async (k: string) => {
+      await landed;
+      store.delete(k);
+    },
+  };
+
+  const rt = getRuntime({ ...cfg('swap'), storage, identity: { getToken: () => 't1' } });
+  const first = rt.identity;
+  let firstCleared = 0;
+  let secondCleared = 0;
+  rt.identity = { ...first, clear: async () => void firstCleared++ };
+  const wrappedFirst = rt.identity;
+
+  const loggingOut = rt.logout(); // captures wrappedFirst, then parks in removeItem
+  // The customer reconfigures with a different identity reference mid-logout.
+  getRuntime({ ...cfg('swap'), storage, identity: { getToken: () => 't2' } });
+  const second = rt.identity;
+  assert.notEqual(second, wrappedFirst, 'getRuntime swapped the provider in place');
+  rt.identity = { ...second, clear: async () => void secondCleared++ };
+
+  land();
+  await loggingOut;
+
+  assert.equal(firstCleared, 1, 'the provider that was live when logout began');
+  assert.equal(secondCleared, 1, 'and the one swapped in while it ran');
+});

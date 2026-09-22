@@ -47,6 +47,26 @@ const sent = (): Record<string, unknown>[] =>
     return m ? [JSON.parse(JSON.parse(m[1] as string) as string) as Record<string, unknown>] : [];
   });
 
+// The scripts that are random-bytes REQUESTS, newest last, plus the per-request
+// nonce each one carries (random.ts, external review B1): a reply that does not
+// echo it is not ours and the router declines it.
+const randomScripts = (): string[] =>
+  (__lastWebView().injectJavaScript as jest.Mock).mock.calls
+    .map(([script]: [string]) => script)
+    .filter((script: string) => script.includes(RANDOM_REPLY_TAG));
+
+const answerLastRandom = (el: ReturnType<typeof screen.getByTestId>, fill: number) => {
+  const script = randomScripts().at(-1);
+  if (script === undefined) throw new Error('no random request outstanding');
+  const m = /,k="([^"]+)"/.exec(script);
+  if (!m) throw new Error('the injected random script carries no nonce');
+  return fireEvent(el, 'message', {
+    nativeEvent: {
+      data: JSON.stringify({ tag: RANDOM_REPLY_TAG, nonce: m[1], bytes: Array(16).fill(fill) }),
+    },
+  });
+};
+
 const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion = 1) =>
   fireEvent(el, 'message', {
     nativeEvent: {
@@ -415,7 +435,10 @@ test('a reload while the random round trip is parked does not poison the next ha
     expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
 
     // Page B, the reloaded document. Two replies: one for the session key, one
-    // for the install id this first launch still has to mint.
+    // for the install id this first launch still has to mint. Page A's own
+    // parked request is still in the mock's call log, so count from where page
+    // B starts rather than from zero.
+    const beforeB = randomScripts().length;
     await fireEvent(el, 'message', {
       nativeEvent: {
         data: JSON.stringify({
@@ -426,12 +449,13 @@ test('a reload while the random round trip is parked does not poison the next ha
         }),
       },
     });
+    // Two round trips: the session key, then the install id this first launch
+    // still has to mint. Each answer must carry its OWN request's nonce, so the
+    // second one waits for that request to actually go out.
     for (let i = 0; i < 2; i++) {
-      await fireEvent(el, 'message', {
-        nativeEvent: {
-          data: JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(4) }),
-        },
-      });
+      await act(async () => {});
+      expect(randomScripts()).toHaveLength(beforeB + i + 1);
+      await answerLastRandom(el, 4);
     }
 
     const answer = sent().find((m) => m.id === 'b1');

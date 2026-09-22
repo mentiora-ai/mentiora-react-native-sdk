@@ -309,3 +309,88 @@ test('the only value ever written under the wasSignedIn key is the flag, never t
   assert.deepEqual(written, ['1', '1']);
   assert.ok(![...m.values()].includes(token), 'the token must never reach storage');
 });
+
+// --- External review, B2 ---
+//
+// `mintToken` used to write `cache` and the `wasSignedIn` marker with no
+// generation check at all, so a `refresh()`/`initial()` sitting in `retry`,
+// `fetch`, a retry sleep or response parsing when `clear()` ran would resume
+// afterwards and put both back. The next boot then reused a pre-logout token.
+test('a mint that resumes after clear() repopulates neither the cache nor the marker', async () => {
+  const { m, storage } = memory();
+  let calls = 0;
+  let release!: (t: string) => void;
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage,
+    identity: {
+      getToken: () => {
+        calls++;
+        return calls === 1
+          ? new Promise<string>((res) => {
+              release = res;
+            })
+          : jwt(2000000000);
+      },
+    },
+  });
+
+  const inFlight = p.refresh(); // parked inside getToken
+  await p.clear(); // the user logs out while it is parked
+  release(jwt(2000000000));
+
+  await assert.rejects(inFlight, IdentityUnavailable);
+  assert.equal(m.get(wasSignedInKey('k')), undefined, 'the marker must not come back');
+
+  // And nothing was cached: a surviving pre-logout token would be handed back
+  // here with no second fetch.
+  await p.refresh();
+  assert.equal(calls, 2, 'the pre-logout token must not be reused from cache');
+});
+
+test('a mint whose marker write lands after clear() undoes it', async () => {
+  const { m, storage } = memory();
+  let releaseWrite!: () => void;
+  const slowWrite: MentioraStorage = {
+    ...storage,
+    setItem: async (k, v) => {
+      await new Promise<void>((res) => {
+        releaseWrite = res;
+      });
+      await storage.setItem(k, v);
+    },
+  };
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage: slowWrite,
+    identity: { getToken: () => jwt(2000000000) },
+  });
+
+  const inFlight = p.refresh(); // parked inside storage.setItem
+  await new Promise((r) => setImmediate(r));
+  await p.clear();
+  releaseWrite();
+  await assert.rejects(inFlight, IdentityUnavailable);
+  assert.equal(m.get(wasSignedInKey('k')), undefined, 'a marker set post-logout deadlocks boot');
+});
+
+test('an uninterrupted mint still caches and still writes the marker', async () => {
+  const { m, storage } = memory();
+  let calls = 0;
+  const p = createIdentityProvider({
+    embedKey: 'k',
+    storage,
+    identity: { endpoint: 'https://api.example.com/token' },
+    fetchImpl: (async () => {
+      calls++;
+      return {
+        ok: true,
+        json: async () => ({ token: jwt(2000000000) }),
+      } as unknown as Response;
+    }) as typeof fetch,
+  });
+  assert.equal(typeof (await p.initial()), 'string');
+  assert.equal(m.get(wasSignedInKey('k')), '1');
+  await p.refresh();
+  assert.equal(calls, 1, 'the cache still works when no logout intervened');
+});

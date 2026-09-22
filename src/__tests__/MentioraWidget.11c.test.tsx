@@ -11,7 +11,6 @@ import {
   __resolveHostInsetsForTest,
   MentioraWidget,
 } from '../MentioraWidget';
-import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
 
@@ -64,9 +63,6 @@ const handshake = async (el: ReturnType<typeof screen.getByTestId>) => {
         params: { protocolVersion: 1 },
       }),
     },
-  });
-  await fireEvent(el, 'message', {
-    nativeEvent: { data: JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(7) }) },
   });
 };
 

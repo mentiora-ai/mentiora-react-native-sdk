@@ -14,6 +14,19 @@
  * One request in flight at a time: `bytes()` is only ever called during the
  * handshake, so a second call while one is pending rejects rather than
  * queuing — there is no general request/response correlator here.
+ *
+ * A reply is authenticated by a PER-REQUEST NONCE, never by the tag alone.
+ * The tag is a module constant, so anything that can reach
+ * `window.ReactNativeWebView.postMessage` — including the page's sandboxed
+ * custom-block iframe, which is exactly who the session key defends the host
+ * against (design.md:172) — could otherwise spell it, hand back 16 chosen
+ * bytes and pick the session key and the install id. The nonce goes out
+ * inside the injected script, which runs in the MAIN frame only, and comes
+ * back in the reply; a sub-frame never sees either, so it cannot spell one.
+ * Unguessable rather than merely unique: `Math.random` is not a CSPRNG, but
+ * this generator lives in the React Native JS realm, whose stream nothing on
+ * the page side can observe or seed — and if we had a CSPRNG here there would
+ * be no round trip to protect. The counter only guarantees non-repetition.
  */
 
 export type RandomSource = {
@@ -34,6 +47,12 @@ export type RandomSource = {
 };
 
 export const RANDOM_REPLY_TAG = '__mentiora_random__';
+
+let nonceCounter = 0;
+/** Per-request, non-repeating, and unpredictable from the page side (see the
+ *  file header). Not exported: nothing outside this module may mint one. */
+const newNonce = (): string =>
+  `${++nonceCounter}.${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 
 export type RandomDeps = {
   inject: (script: string) => void;
@@ -61,6 +80,7 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     reject: (e: Error) => void;
     timer: unknown;
     count: number;
+    nonce: string;
   } | null = null;
 
   const bytes = (count: number): Promise<Uint8Array> => {
@@ -79,19 +99,20 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     }
 
     return new Promise<Uint8Array>((resolve, reject) => {
+      const nonce = newNonce();
       const timer = setTimer(() => {
         pending = null;
         reject(new Error('random bytes request timed out'));
       }, timeoutMs);
-      pending = { resolve, reject, timer, count };
+      pending = { resolve, reject, timer, count, nonce };
 
-      const script = `(function(){try{
+      const script = `(function(){var t=${JSON.stringify(RANDOM_REPLY_TAG)},k=${JSON.stringify(nonce)};try{
   var n = ${JSON.stringify(count)};
   var a = new Uint8Array(n);
   crypto.getRandomValues(a);
-  window.ReactNativeWebView.postMessage(JSON.stringify({tag:${JSON.stringify(RANDOM_REPLY_TAG)},bytes:Array.from(a)}));
+  window.ReactNativeWebView.postMessage(JSON.stringify({tag:t,nonce:k,bytes:Array.from(a)}));
 }catch(e){
-  window.ReactNativeWebView.postMessage(JSON.stringify({tag:${JSON.stringify(RANDOM_REPLY_TAG)},error:String((e&&e.message)||e)}));
+  window.ReactNativeWebView.postMessage(JSON.stringify({tag:t,nonce:k,error:String((e&&e.message)||e)}));
 }})();true;`;
       deps.inject(script);
     });
@@ -109,10 +130,17 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     if (obj.tag !== RANDOM_REPLY_TAG) return false;
 
     const current = pending;
-    pending = null;
-    if (current) clearTimer(current.timer);
+    // The nonce is the whole authentication: no pending request, or a nonce
+    // that is not THIS request's, means the message is not ours. Fall through
+    // to the JSON-RPC parser (which drops it, id-less) rather than consuming
+    // it — and, above all, never resolve, reject or free the pending request
+    // on a stranger's say-so. A stale reply from a document that a load
+    // boundary already superseded lands here too, and must not answer the
+    // replacement page's request.
+    if (!current || obj.nonce !== current.nonce) return false;
 
-    if (!current) return true;
+    pending = null;
+    clearTimer(current.timer);
 
     if (typeof obj.error === 'string') {
       current.reject(new Error(obj.error));
