@@ -269,9 +269,9 @@ test('work from a superseded load generation neither sends nor mutates', async (
 });
 
 // `-32003` (URL denied) and `-32002` (identity unavailable) are both required
-// answers (design.md §2.3, §2.6 and Revision 1), and neither is reachable while
-// every handler rejection collapses to `-32603`. The peer does not know what a
-// URL or an identity is, so the code rides on the throw.
+// answers, and neither is reachable while every handler rejection collapses to
+// `-32603`. The peer does not know what a URL or an identity is, so the code
+// rides on the throw.
 const peerThatThrows = (e: unknown) => {
   const sent: string[] = [];
   const peer = createHostPeer({
@@ -326,13 +326,12 @@ test('any other throw is still -32603 with the generic message', async () => {
   assert.deepEqual(lastSent(sent).error, { code: -32603, message: 'Internal error' });
 });
 
-// Branch review, m1. The session-key check on page->host RESPONSES was
-// entirely uncovered — replacing its condition with `if (false)` left the
-// whole suite green. `fixtures.test.ts` replays `unknown-method`'s response
-// through a peer whose key already matches, so it only ever walks the accept
-// side. design.md §2.2 makes this a MUST ("reject any page -> host message —
-// request, notification OR response — whose params.sessionKey does not
-// match"), and it is the one of the three with no other guard behind it.
+// The session-key check applies to page->host responses as well as requests and
+// notifications, and responses are the one of the three with no other guard
+// behind them. `fixtures.test.ts` replays `unknown-method`'s response through a
+// peer whose key already matches, so it only ever walks the accept side: without
+// the two tests below, replacing the check's condition with `if (false)` leaves
+// the suite green.
 test('a page-sent response with a wrong session key is rejected with -32001', async () => {
   const { peer, sent } = makePeer();
   await peer.receive(

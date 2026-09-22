@@ -16,15 +16,14 @@ export type ErrorScreenProps = {
  * way out of the customer's app, not an optional affordance.
  *
  * `code` is not shown: all three MentioraErrorCode values render the same
- * plain-English `errorBody`. The code exists for the host app via `onEvent`
- * (wired in a later task), not for the person staring at the screen.
+ * plain-English `errorBody`. The code is for the host app, via `onEvent`.
  */
 export function ErrorScreen(props: ErrorScreenProps): React.JSX.Element {
   const { strings, onRetry, onDismiss } = props;
-  // A plain `{ ...DEFAULT_STRINGS, ...strings }` spread lets an explicit
+  // A `{ ...DEFAULT_STRINGS, ...strings }` spread would let an explicit
   // `undefined` (e.g. `strings={{ retry: cond ? 'x' : undefined }}`) blank a
-  // control's label — on the one screen whose only exit must never go
-  // invisible. Skip keys the caller set to undefined instead of applying them.
+  // control's label, on the one screen whose only exit must stay visible.
+  // Keys the caller set to undefined are skipped rather than applied.
   const s = { ...DEFAULT_STRINGS };
   for (const key of Object.keys(DEFAULT_STRINGS) as (keyof MentioraStrings)[]) {
     const value = strings?.[key];

@@ -1,7 +1,7 @@
 // `scripts/run-core-tests.mjs` is the only thing standing between a tsconfig
-// change that silently stops emitting core tests and a green CI. Its guard used
-// to fire only when the emitted count was exactly zero (external review, M5), so
-// dropping all but one test file passed and CI ran a silent subset.
+// change that silently stops emitting core tests and a green CI. A guard that
+// fires only when the emitted count is zero lets a change dropping all but one
+// test file pass while CI runs a silent subset.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -38,10 +38,9 @@ const tree = (sources, emitted) => {
 };
 
 const run = (root) => {
-  // NODE_TEST_CONTEXT is set for the process running THIS file, and a nested
-  // `node --test` that inherits it reports to a parent that is not listening:
-  // it runs nothing and prints nothing. Dropping it is what makes the fixture
-  // actually execute.
+  // NODE_TEST_CONTEXT is set for the process running this file, and a nested
+  // `node --test` that inherits it reports to a parent that is not listening: it
+  // runs nothing and prints nothing. Dropping it is what makes the fixture execute.
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   return execFileSync(process.execPath, [join(root, 'scripts', 'run-core-tests.mjs')], {

@@ -1,21 +1,19 @@
 /**
- * Hand-written guards for every inbound (page → host) JSON-RPC message.
- *
- * No zod: the package keeps zero runtime dependencies (design.md §2.2).
+ * Hand-written guards for every inbound (page → host) JSON-RPC message. No
+ * zod: the package keeps zero runtime dependencies.
  *
  * Contract, enforced here:
  * - `id`, when present, is a non-empty string. A numeric id is invalid.
- * - `params` is required on requests and notifications; a sender that omits
- *   it is read as `{}` rather than dropped, because dropping it would hang
- *   the sender's caller for its full 30s timeout waiting for an answer that
- *   was actually sent. A response also carries `params` (it is where
- *   `params.sessionKey` lives) and gets the same missing → `{}` treatment,
- *   because a page's response to a host-initiated request is itself a
- *   page → host message the session-key MUST applies to.
- * - Unknown top-level fields are ignored, never a reason to reject a
- *   message — `parseInbound` only ever copies out the fields it recognises.
- * - A response carries an `id` plus `result` or `error`, and never a
- *   `method`.
+ * - `params` is required on requests and notifications, and a sender that
+ *   omits it is read as `{}` rather than dropped — dropping hangs the
+ *   sender's caller for its full 30s timeout. A response carries `params`
+ *   too, since that is where `params.sessionKey` lives, and gets the same
+ *   treatment: a page's response is itself a page → host message the
+ *   session-key rule applies to.
+ * - Unknown top-level fields are ignored; `parseInbound` copies out only the
+ *   fields it recognises.
+ * - A response carries an `id` plus exactly one of `result` or `error`, and
+ *   never a `method`.
  */
 
 export type JsonRpcId = string;
@@ -62,9 +60,9 @@ const isErrorPayload = (v: unknown): v is InboundErrorPayload =>
   Number.isInteger(v.code) &&
   typeof v.message === 'string';
 
-// Structural checks only — run these on `parseInbound`'s normalised output,
-// not on a raw `postMessage` payload. They do not themselves default a
-// missing `params`; only `parseInbound` does that.
+// Structural checks only. Run them on `parseInbound`'s normalised output,
+// not on a raw `postMessage` payload: they do not default a missing
+// `params`, only `parseInbound` does.
 
 export function isRequest(v: unknown): v is InboundRequest {
   if (!isPlainObject(v)) return false;
@@ -100,14 +98,11 @@ export function isResponse(v: unknown): v is InboundResponse {
  * Parses a raw `onMessage` payload into a normalised {@link InboundMessage},
  * or `null` when it does not conform to the protocol.
  *
- * Rejects non-JSON, arrays, non-objects and non-2.0 envelopes. Requires a
- * non-empty string `id` when one is present — a numeric id is invalid.
- * Defaults a missing `params` to `{}` on requests, notifications and
- * responses alike rather than dropping the message — a response's `params`
- * is where `params.sessionKey` lives, and the session-key MUST applies to a
- * page's response, not only its requests and notifications. Copies out
- * only the fields it recognises, so an unknown top-level field is ignored
- * rather than a reason to reject.
+ * Rejects non-JSON, arrays, non-objects and non-2.0 envelopes, and requires
+ * a non-empty string `id` when one is present. A missing `params` reads as
+ * `{}` on requests, notifications and responses alike; a present but
+ * malformed one rejects. Copies out only recognised fields, so an unknown
+ * top-level field is ignored rather than a reason to reject.
  */
 export function parseInbound(raw: string): InboundMessage | null {
   let parsed: unknown;
@@ -150,10 +145,8 @@ export function parseInbound(raw: string): InboundMessage | null {
   if (typeof id !== 'string') return null;
   if (hasResult === hasError) return null; // exactly one of result / error
 
-  // A response also carries `params` — it is where `params.sessionKey` lives,
-  // and the session-key MUST applies to page-sent responses too. Same
-  // present / malformed / default-to-`{}` handling as requests and
-  // notifications: missing reads as `{}`, present-but-malformed rejects.
+  // A response's `params` is where `params.sessionKey` lives, and the
+  // session-key rule applies to page-sent responses too.
   const rawParams = parsed.params;
   if (rawParams !== undefined && !isJsonRpcParams(rawParams)) return null;
   const params: JsonRpcParams = isJsonRpcParams(rawParams) ? rawParams : {};

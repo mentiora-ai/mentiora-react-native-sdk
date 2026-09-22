@@ -1,50 +1,49 @@
 /**
  * Identity: the token (or lack of one) the widget's server uses to decide
- * who the user is (design.md §2.3). A token means a signed-in user; no
- * token means an anonymous user keyed to the install id.
+ * who the user is. A token means a signed-in user; no token means an
+ * anonymous user keyed to the install id.
  *
- * Two rules make this more than "fetch a JWT":
+ * `initial()` runs inside the page's 8s handshake, part of which the
+ * random-bytes round trip may already have spent, so it gets the short
+ * `BOOT_RETRY_POLICY` ladder and a failure still leaves time to answer.
+ * `refresh()` (`mentiora/refreshIdentity`) is bounded by the page's own 30s
+ * request timeout instead, and gets the longer `REFRESH_RETRY_POLICY`.
  *
- * - Boot (`initial()`) runs *inside* the page's 8s handshake, of which
- *   Task 5's random-bytes step may already have spent 2s. It gets the short
- *   `BOOT_RETRY_POLICY` ladder so a failure still leaves time to answer the
- *   handshake. `refresh()` (`mentiora/refreshIdentity`) is bounded by the
- *   page's own 30s request timeout instead, so it gets the full
- *   `REFRESH_RETRY_POLICY` ladder.
- * - A failed boot must never quietly demote a signed-in user to a fresh
- *   anonymous one. `wasSignedInKey(embedKey)` in `storage` records that this
- *   install has held a token before; a boot failure on a flagged install
- *   throws `IdentityUnavailable` (failing the handshake) instead of
- *   answering anonymously and orphaning that user's threads.
+ * A failed boot must never demote a signed-in user to a fresh anonymous one.
+ * `wasSignedInKey(embedKey)` records that this install has held a token; a
+ * boot failure on a flagged install throws `IdentityUnavailable`, failing the
+ * handshake, rather than answering anonymously and orphaning that user's
+ * threads.
  *
- * The token itself never touches storage and is never logged — only the
+ * The token never touches storage and is never logged; only the
  * `wasSignedIn` boolean is persisted.
  */
 
 import { type RetryPolicy, retry } from './retry.js';
 import type { MentioraIdentity, MentioraStorage } from './types.js';
 
-/** The logout epoch, shared by every provider a runtime entry ever owns
- *  (re-review, F3). A mutable box rather than a number because `getRuntime`
- *  swaps `runtime.identity` in place on any new `identity` reference — which
- *  an inline `identity={{ … }}` literal produces on every render — and a
- *  provider discarded that way can still have a mint parked in `fetch`. With a
- *  per-provider counter that discarded provider never sees the logout at all:
- *  it resumes, writes the `wasSignedIn` marker onto a logged-out install, and
- *  every later boot throws `IdentityUnavailable` forever. */
+/** The logout epoch, shared by every provider a runtime entry ever owns. A
+ *  mutable box rather than a number because `getRuntime` swaps
+ *  `runtime.identity` in place on any new `identity` reference — which an
+ *  inline `identity={{ … }}` literal produces every render — and a provider
+ *  discarded that way can still have a mint parked in `fetch`. A per-provider
+ *  counter leaves that mint blind to the logout: it resumes, writes the
+ *  `wasSignedIn` marker onto a logged-out install, and every later boot throws
+ *  `IdentityUnavailable`. */
 export type LogoutEpoch = { n: number };
 
 export type IdentityProvider = {
   /**
-   * Boot: the token to put in InitializeResult, or undefined for anonymous.
-   * Throws IdentityUnavailable when the fetch fails AND this install was signed in before —
-   * the caller then fails the handshake and shows the error surface, because answering
-   * without a token would demote a signed-in user to a fresh anonymous one (§2.3).
+   * Boot: the token for InitializeResult, or undefined for anonymous. Throws
+   * IdentityUnavailable when the fetch fails and this install was signed in
+   * before — answering without a token would demote a signed-in user to a
+   * fresh anonymous one, so the caller fails the handshake and shows the
+   * error surface instead.
    */
   initial: () => Promise<string | undefined>;
   /** mentiora/refreshIdentity. Throws IdentityUnavailable to produce -32002. */
   refresh: () => Promise<string>;
-  /** Drops the cached token AND the wasSignedIn flag. Called by logout (Task 7a). */
+  /** Drops the cached token and the wasSignedIn flag. Called by logout. */
   clear: () => Promise<void>;
 };
 
@@ -73,9 +72,8 @@ export const BOOT_RETRY_POLICY: RetryPolicy = {
   totalBudgetMs: 4000,
 };
 
-// base64url decode, written by hand (mirrors random.ts's encoder) rather than
-// via Buffer/atob: React Native's Hermes has neither guaranteed, and this is
-// the only place identity.ts needs one.
+// base64url decode by hand (mirroring random.ts's encoder) rather than via
+// Buffer/atob: React Native's Hermes guarantees neither.
 const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 const BASE64URL_LOOKUP: Record<string, number> = {};
 for (let i = 0; i < BASE64URL_ALPHABET.length; i++) {
@@ -129,8 +127,8 @@ const bytesToUtf8 = (bytes: Uint8Array): string => {
 
 type JwtPayload = { exp?: unknown; iat?: unknown };
 
-/** Decodes segment 1 of a JWT without verifying anything — a signature
- *  check is the server's job. Returns null for anything it cannot read. */
+/** Decodes a JWT's payload segment without verifying anything; checking the
+ *  signature is the server's job. Returns null for anything it cannot read. */
 const decodePayload = (jwt: string): JwtPayload | null => {
   try {
     const segment = jwt.split('.')[1];
@@ -180,28 +178,23 @@ export const createIdentityProvider = (deps: {
   // It is never handed to `storage`.
   let cache: { token: string; expMs: number } | undefined;
 
-  // Bumped SYNCHRONOUSLY at the top of `clear()` (external review, B2). An
-  // acquisition is a long chain of awaits — the retry ladder, `fetch`, a retry
-  // sleep, response parsing — and a `logout()` landing anywhere inside it used
-  // to be undone the moment the chain resumed: `mintToken` wrote `cache` and
-  // the `wasSignedIn` marker unconditionally, so the next boot reused a
-  // pre-logout token. Every acquisition captures this on entry and re-checks
-  // it before each write and before returning; a mismatch means the token it
-  // is holding belongs to a user who has since logged out, and it is dropped
-  // rather than published.
+  // Bumped synchronously at the top of `clear()`. An acquisition is a long
+  // chain of awaits — the retry ladder, `fetch`, a retry sleep, response
+  // parsing — and a `logout()` can land anywhere inside it, so every
+  // acquisition captures the epoch on entry and re-checks it before each write
+  // and before returning. A mismatch means the token belongs to a user who has
+  // since logged out, and it is dropped rather than published.
   //
-  // SHARED with every other provider on this embed key (re-review, F3) — it is
-  // the runtime entry's, not this closure's. A default is kept so a provider
-  // built outside a runtime (every identity test) still has one of its own.
+  // Shared with every other provider on this embed key: the epoch belongs to
+  // the runtime entry, not to this closure. The default covers a provider
+  // built outside a runtime.
   const epoch = deps.epoch ?? { n: 0 };
 
-  // Which epoch owns the `wasSignedIn` marker currently in storage, so a stale
-  // mint only ever undoes ITS OWN write (re-review, F5). Mint A (epoch 0) parks
-  // in `setItem`; the user logs out and signs back in; mint B (epoch 1)
-  // completes; A then resumes and, with an unscoped undo, removes B's marker —
-  // leaving a signed-in install unmarked, which demotes it to anonymous on the
-  // next boot failure. Stamped BEFORE the await, not after, so the later write
-  // is always the one that owns the marker.
+  // Which epoch owns the `wasSignedIn` marker in storage, so a stale mint only
+  // ever undoes its own write: mint A parks in `setItem`, the user logs out and
+  // signs back in, mint B completes, and an unscoped undo by A would remove B's
+  // marker, demoting a signed-in install to anonymous on the next boot failure.
+  // Stamped before the await, so the later write always owns the marker.
   let markerEpoch = -1;
 
   const isFresh = (floorMs: number): boolean =>
@@ -240,7 +233,7 @@ export const createIdentityProvider = (deps: {
     if (exp !== null && iat !== null && exp - iat > 3600) {
       warn?.('mentiora identity: token exp - iat exceeds 3600s and will be rejected by the mint');
     }
-    // A token with no readable exp is used but never cached (§ decodeExp).
+    // A token with no readable exp is used but never cached.
     cache = exp !== null ? { token: raw, expMs: exp * 1000 } : undefined;
 
     try {
@@ -253,12 +246,12 @@ export const createIdentityProvider = (deps: {
         await storage.removeItem(wasSignedInKey(embedKey));
       }
     } catch {
-      // A failed flag write must not fail a successful boot/refresh — the
-      // caller already has a token. Nothing else in this function swallows.
+      // A failed flag write must not fail a successful boot or refresh — the
+      // caller already has a token. Nothing else here swallows.
     }
 
     if (cleared()) {
-      // Only our own token, never a newer mint's (re-review, F5).
+      // Only our own token, never a newer mint's.
       if (cache?.token === raw) cache = undefined;
       throw new IdentityUnavailable('identity cleared while the token was in flight');
     }
@@ -268,13 +261,10 @@ export const createIdentityProvider = (deps: {
 
   const initial = async (): Promise<string | undefined> => {
     if (!identity) {
-      // The marker is read BEFORE the anonymous shortcut (external review,
-      // M2). An install that has held a token and restarts before identity is
-      // configured — a customer that fetches its own JWT and hands it over a
-      // render or two later, an app that boots the widget from a cold start
-      // before its auth layer is ready — would otherwise be demoted to a fresh
-      // anonymous user and have its threads orphaned, which is the exact
-      // failure this marker exists to prevent (§2.3).
+      // The marker is read before the anonymous shortcut. An install that has
+      // held a token and restarts before identity is configured — an app that
+      // boots the widget before its auth layer is ready — would otherwise be
+      // demoted to a fresh anonymous user with its threads orphaned.
       const wasSignedIn = await storage.getItem(wasSignedInKey(embedKey));
       if (wasSignedIn) {
         throw new IdentityUnavailable(

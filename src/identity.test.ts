@@ -120,16 +120,9 @@ test('retries then throws IdentityUnavailable inside the 8s budget', async () =>
 });
 
 test('boot gets the shorter ladder, because it runs inside the 8s handshake', async () => {
-  // NOTE (deviation from the brief's literal test): the brief's version of this
-  // test used a fresh, never-signed-in install and asserted that p.initial()
-  // REJECTS with IdentityUnavailable. That directly contradicts the very next
-  // test ("boot failure on a never-signed-in install is anonymous, not an
-  // error") and the brief's own §2.3/resolution #2: a boot failure on an
-  // install that was never signed in must resolve `undefined`, not throw.
-  // This test's actual purpose (per its title/comment) is to verify
-  // BOOT_RETRY_POLICY's attempt count, which requires a signed-in install so
-  // the failure path throws instead of falling back to anonymous. Seeding the
-  // wasSignedIn flag preserves that intent under the correct implementation.
+  // The wasSignedIn flag is seeded because counting BOOT_RETRY_POLICY's attempts
+  // needs the failure path to throw. On a never-signed-in install a boot failure
+  // resolves `undefined` instead, which is what the next test covers.
   let hits = 0;
   const { storage, m } = memory();
   m.set(wasSignedInKey('k'), '1');
@@ -253,14 +246,13 @@ test('a failed wasSignedIn flag write does not fail an otherwise-successful boot
   );
 });
 
-// Branch review, M5. Two design-level invariants (§2.3, §2.4) with no
-// assertion anywhere: "can a token outlive a logout" and "the token never
-// touches storage". Both mutations were fully green.
+// Two invariants the rest of the file leaves unasserted: a token must not outlive
+// a logout, and the token must never touch storage.
 
 test('clear drops the cached token too, so the next user never inherits it', async () => {
-  // The fetcher shape, because that is the only one with a reuse window at
-  // all (`refresh()` on a `getToken` provider always re-calls, so the same
-  // test written against it would pass with the cache left fully intact).
+  // The fetcher shape is the only one with a reuse window: `refresh()` on a
+  // `getToken` provider always re-calls, so the same test written against it
+  // passes with the cache left fully intact.
   const now = 1_000_000_000_000;
   let hits = 0;
   const p = make({
@@ -285,9 +277,8 @@ test('clear drops the cached token too, so the next user never inherits it', asy
 });
 
 test('the only value ever written under the wasSignedIn key is the flag, never the token', async () => {
-  // §2.3: "The token lives in memory only. It is never written to storage or
-  // logged." Nothing asserted that, and `assert.ok(m.get(...))` above is
-  // truthy for a JWT just as happily as for '1'.
+  // The token lives in memory only. `assert.ok(m.get(...))` above is truthy for a
+  // JWT just as happily as for '1', so it does not pin that down.
   const { m, storage } = memory();
   const written: string[] = [];
   const watched: MentioraStorage = {
@@ -310,12 +301,10 @@ test('the only value ever written under the wasSignedIn key is the flag, never t
   assert.ok(![...m.values()].includes(token), 'the token must never reach storage');
 });
 
-// --- External review, B2 ---
-//
-// `mintToken` used to write `cache` and the `wasSignedIn` marker with no
-// generation check at all, so a `refresh()`/`initial()` sitting in `retry`,
-// `fetch`, a retry sleep or response parsing when `clear()` ran would resume
-// afterwards and put both back. The next boot then reused a pre-logout token.
+// `mintToken` writes `cache` and the `wasSignedIn` marker behind a generation
+// check. Without one, a `refresh()`/`initial()` sitting in `retry`, `fetch`, a
+// retry sleep or response parsing when `clear()` runs resumes afterwards and puts
+// both back, and the next boot reuses a pre-logout token.
 test('a mint that resumes after clear() repopulates neither the cache nor the marker', async () => {
   const { m, storage } = memory();
   let calls = 0;
@@ -395,12 +384,10 @@ test('an uninterrupted mint still caches and still writes the marker', async () 
   assert.equal(calls, 1, 'the cache still works when no logout intervened');
 });
 
-// --- External review, M2 ---
-//
-// `initial()` returned anonymous on `!identity` BEFORE reading the marker, so a
-// signed-in install restarting while identity is not (yet) configured was
-// silently demoted to a fresh anonymous user and its threads orphaned — the
-// exact failure the marker exists to prevent (§2.3).
+// `initial()` reads the marker before returning anonymous on `!identity`.
+// Returning first demotes a signed-in install that restarts while identity is not
+// yet configured to a fresh anonymous user, orphaning its threads — the failure
+// the marker exists to prevent.
 test('a signed-in install with no identity configured fails the handshake', async () => {
   const { m, storage } = memory();
   m.set(wasSignedInKey('k'), '1');
@@ -414,14 +401,11 @@ test('an install that was never signed in still boots anonymous with no identity
   assert.equal(await p.initial(), undefined);
 });
 
-// --- Re-review, F4 ---
-//
-// The B2 test above passes with the post-`retry` `cleared()` check deleted: its
-// assertions are all satisfied by the two LATER checks. But that check is the
+// The test above still passes with the post-`retry` `cleared()` check deleted,
+// because its assertions are satisfied by the two later checks. That check is the
 // only thing keeping `cache` from holding a pre-logout token during the
-// `await storage.setItem` window, and a concurrent `refresh()` on a fetcher-
-// shape provider takes the `isFresh` shortcut straight into it — handing the
-// logged-out user's token to the next one.
+// `await storage.setItem` window, where a concurrent `refresh()` on a fetcher-shape
+// provider takes the `isFresh` shortcut straight into it.
 test('a mint resuming after clear() never publishes its token, not even transiently', async () => {
   const now = 1_000_000_000_000;
   const tokenA = jwt(now / 1000 + 3600);
@@ -481,12 +465,10 @@ test('a mint resuming after clear() never publishes its token, not even transien
   await assert.rejects(inFlight, IdentityUnavailable);
 });
 
-// --- Re-review, F5 ---
-//
-// A stale mint's undo was unscoped: it removed whatever marker was in storage
-// and wiped whatever token was cached, even when both belonged to a NEWER mint
-// that had already completed. The outcome is a signed-in install with no
-// marker, which a later boot failure demotes to anonymous — the §2.3 failure.
+// A stale mint's undo is scoped to its own generation. Unscoped, it removes
+// whatever marker is in storage and wipes whatever token is cached, even when both
+// belong to a newer mint that has already completed, leaving a signed-in install
+// with no marker that a later boot failure demotes to anonymous.
 test("a stale mint's undo cannot erase a newer mint's marker or cache", async () => {
   const now = 1_000_000_000_000;
   const tokenA = jwt(now / 1000 + 3600);

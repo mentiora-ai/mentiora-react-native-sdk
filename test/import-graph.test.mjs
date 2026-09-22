@@ -1,8 +1,8 @@
 // `scripts/check-import-graph.mjs` is what the consumer-install job leans on to
-// prove a packed tarball actually works under npm (external review, M4): the
-// `require.resolve`/`import.meta.resolve` checks it sits beside resolve the
-// entry files without evaluating them or walking their imports, so a runtime
-// import missing from `peerDependencies` used to pass.
+// prove a packed tarball works under npm. The `require.resolve` /
+// `import.meta.resolve` checks beside it resolve the entry files without
+// evaluating them or walking their imports, so on their own they pass a runtime
+// import that is missing from `peerDependencies`.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';

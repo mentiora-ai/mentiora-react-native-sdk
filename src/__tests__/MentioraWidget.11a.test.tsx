@@ -1,9 +1,6 @@
-// src/__tests__/MentioraWidget.11a.test.tsx
-//
-// Task 11a: bridge wiring. The composition root is the first place any of the
-// modules below meets another, so these tests are integration tests by nature —
-// a real peer, a real random source, a real runtime, and the mock WebView as the
-// only stand-in.
+// Bridge wiring. The composition root is the first place any of the modules below
+// meets another, so these are integration tests: a real peer, a real random source,
+// a real runtime, and the mock WebView as the only stand-in.
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Linking } from 'react-native';
 import {
@@ -31,8 +28,8 @@ beforeEach(() => {
 const scripts = (view: MockWebViewRef = __lastWebView()): string[] =>
   (view.injectJavaScript as jest.Mock).mock.calls.map(([script]: [string]) => script);
 
-// Host → page messages only. Task 5's random-bytes request goes out through the
-// same channel and is not a bridge message, so it is filtered rather than parsed.
+// Host-to-page messages only. The random-bytes request goes out through the same
+// channel and is not a bridge message, so it is filtered rather than parsed.
 const BRIDGE_INJECTION = /^window\.mentioraHost\.receive\((.*)\);true;$/s;
 
 const sentFrom = (view: MockWebViewRef): Record<string, unknown>[] =>
@@ -51,9 +48,8 @@ const waitForSent = (n: number): Promise<void> =>
 // The scripts that are random-bytes REQUESTS, newest last.
 const randomScripts = (): string[] => scripts().filter((s) => s.includes(RANDOM_REPLY_TAG));
 
-// Each request carries its own nonce (random.ts, external review B1) and only a
-// reply echoing it counts — the tag alone is a module constant anything that can
-// postMessage could spell.
+// Each request carries its own nonce and only a reply echoing it counts: the tag
+// alone is a module constant anything that can postMessage could spell.
 const nonceOf = (script: string): string => {
   const m = /,k="([^"]+)"/.exec(script);
   if (!m) throw new Error('the injected random script carries no nonce');
@@ -117,10 +113,9 @@ test('answers initialize with OUR protocol version and a session key', async () 
   expect(typeof reply.result?.sessionKey).toBe('string');
   expect((reply.result?.sessionKey as string | undefined)?.length ?? 0).toBeGreaterThan(0);
   expect(typeof reply.result?.installId).toBe('string');
-  // Reads the generated constants rather than a literal: a literal breaks on
-  // every version bump, while what this asserts is that the handler reports OUR
-  // descriptor at all. A stale version.ts is caught by the release guard
-  // (test/release-guard.test.mjs, scripts/assert-version.mjs), not here.
+  // The generated constants, not a literal that breaks on every version bump. What
+  // this pins is that the handler reports our descriptor at all; a stale version.ts
+  // is caught by the release guard.
   expect(reply.result?.sdk).toEqual({ name: SDK_NAME, version: SDK_VERSION });
 });
 
@@ -164,12 +159,10 @@ test('the random reply is taken by the router and never reaches the peer', async
   }
 });
 
-// External review, B1. The reply used to be authenticated on `obj.tag` alone —
-// a module constant — so the page's sandboxed custom-block iframe, the one
-// party the session key exists to defend the host against (design.md:172),
-// could answer the host's pending request with 16 bytes of its own choosing and
-// pick both the session key and the install id. The nonce lives in the injected
-// script, which runs in the main frame only.
+// The nonce lives in the injected script, which runs in the main frame only.
+// Authenticating the reply on `obj.tag` alone — a module constant — lets the page's
+// sandboxed custom-block iframe answer the host's pending request with 16 bytes of
+// its own choosing and pick both the session key and the install id.
 test('a tagged reply with the wrong nonce cannot choose the session key', async () => {
   const real = globalThis.crypto;
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
@@ -270,9 +263,8 @@ test('a same-origin sub-frame navigation does NOT clear the session key', async 
 
 test('an allowed top-frame navigation is a load boundary and resets the session', async () => {
   const el = await mount();
-  // The document itself commits first, so what the navigation below proves is
-  // "a DIFFERENT document resets", not merely "the first top-frame request
-  // resets" (external review, M1).
+  // The document itself commits first, so the navigation below proves that a
+  // different document resets, not merely that the first top-frame request does.
   await fireEvent(el, 'shouldStartLoadWithRequest', {
     url: `${ORIGIN}/h/rn/${KEY}`,
     isTopFrame: true,
@@ -298,13 +290,11 @@ test('an allowed top-frame navigation is a load boundary and resets the session'
   expect(sent().at(-1)).toMatchObject({ error: { code: -32001 } });
 });
 
-// External review, M1. Every same-origin top-frame request used to call
-// `beginFreshLoad`, with no check that the document had actually changed. A
-// `/chat` -> `/chat#thread` jump therefore dropped a live session key and
-// reopened the keyless `initialize` latch while the page and its sandbox
-// iframe were still running: every later page call took -32001 and the
-// watchdog reloaded a perfectly healthy page. design.md:184-190 already warns
-// about this class for Android's `onLoadStart`.
+// `beginFreshLoad` runs only when the document actually changed. Calling it on
+// every same-origin top-frame request makes a `/chat` -> `/chat#thread` jump drop a
+// live session key and reopen the keyless `initialize` latch while the page and its
+// sandbox iframe are still running: every later page call takes -32001 and the
+// watchdog reloads a healthy page.
 test('a fragment-only navigation is not a load boundary', async () => {
   const el = await mount();
   await fireEvent(el, 'shouldStartLoadWithRequest', {
@@ -354,13 +344,12 @@ test('a fragment jump does NOT reopen the keyless initialize latch', async () =>
   expect(sent().at(-1)).toMatchObject({ error: { code: -32600 } });
 });
 
-// Re-review, F1. `isSameDocument` split on '#' and compared, so a same-URL
-// navigation and a fragment REMOVAL both read as "same document". Both are full
-// document navigations per the HTML navigate algorithm, and reading either as a
-// fragment jump leaves the new document's `initialize` answered -32600 — a blank
-// widget until the 8s watchdog reloads it, with the one-reload budget spent.
-// The third row isolates the `navigationType` check on its own: the two URLs
-// are fragment-identical, so nothing about the URL comparison can catch it.
+// A same-URL navigation and a fragment removal are both full document navigations
+// per the HTML navigate algorithm. Reading either as a fragment jump — which
+// splitting on '#' and comparing does — leaves the new document's `initialize`
+// answered -32600: a blank widget until the 8s watchdog reloads it, with the
+// one-reload budget spent. The third row isolates the `navigationType` check, since
+// its two URLs are fragment-identical and no URL comparison can catch it.
 test.each([
   ['a same-URL navigation (location.reload / a link to the current path)', '', '', undefined],
   ['a fragment removal (#t -> the bare path)', '#t', '', undefined],
@@ -568,21 +557,15 @@ test('two widgets on one embed key share a runtime and mint ONE install id', asy
   expect(new Set(ids).size).toBe(1);
 });
 
-// Branch review, M2. design.md §2.4 asks for both halves — "a loud `__DEV__`
-// warning that every launch creates a new anonymous user AND an `onEvent` so
-// the degraded state is visible in a release build" — and `resolveStorage`
-// has always computed the flag while nothing read it. The composition root is
-// the caller `storage.ts`'s own header names, so this is where the wiring
-// lives and where it has to be asserted.
+// Degraded storage owes the caller both halves: a `__DEV__` warning that every
+// launch creates a new anonymous user, and an `onEvent` so the state is visible in a
+// release build. `resolveStorage` computes the flag; the composition root is the
+// only place that reads it, so the wiring can only be asserted here.
 //
-// The degraded runtime is built by hand rather than by unmocking the
-// AsyncStorage peer: `jest.setup.ts` mocks that module for the whole suite,
-// and `resolveStorage`'s own branches already have core tests. What has no
-// coverage at all is whether anybody READS the flag, which is exactly what
-// mutating the memoised runtime exercises.
-// Returns the `console.warn` spy as well, both because §2.4 asks for the
-// warning by name and because the real one would otherwise print on every one
-// of these tests.
+// The degraded runtime is built by hand rather than by unmocking the AsyncStorage
+// peer, which `jest.setup.ts` mocks for the whole suite. Mutating the memoised
+// runtime is what exercises the read. Returns the `console.warn` spy too, which also
+// keeps the real warning off every one of these tests.
 const degradeStorage = (reason: 'peer-absent' | 'no-require' = 'peer-absent') => {
   const rt = getRuntime({ widgetOrigin: ORIGIN, embedKey: KEY });
   rt.storage = { ephemeral: true, reason, detail: 'no peer here' };
@@ -595,8 +578,8 @@ test('degraded storage is reported through onEvent, not only to a stripped __DEV
   try {
     await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
     expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'peer-absent' });
-    // The warning too: §2.4 asks for both, and the event alone leaves a dev
-    // with no console trace of why their threads keep vanishing.
+    // The warning too: the event alone leaves a dev with no console trace of why
+    // their threads keep vanishing.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('peer-absent'));
   } finally {
     warn.mockRestore();
@@ -604,9 +587,9 @@ test('degraded storage is reported through onEvent, not only to a stripped __DEV
 });
 
 test('the reason travels with the event — the three fallbacks need different fixes', async () => {
-  // 'peer-absent' says "install the peer"; 'no-require' says "this build
-  // cannot auto-resolve one at all, pass `storage`". A hard-coded reason would
-  // pass the test above and send every customer down the wrong road.
+  // 'peer-absent' says "install the peer"; 'no-require' says "this build cannot
+  // auto-resolve one at all, pass `storage`". A hard-coded reason passes the test
+  // above and sends every customer down the wrong road.
   const warn = degradeStorage('no-require');
   const onEvent = jest.fn();
   try {
@@ -624,9 +607,8 @@ test('working storage says nothing at all', async () => {
 });
 
 test('one degraded store is reported once per embed key, not once per presentation', async () => {
-  // The Modal mounts a fresh `<MentioraWidget />` on every `Mentiora.open()`
-  // (§2.7), so an emit tied to mount would fire on every open for a fact that
-  // has not changed.
+  // The Modal mounts a fresh `<MentioraWidget />` on every `Mentiora.open()`, so an
+  // emit tied to mount fires on every open for a fact that has not changed.
   const warn = degradeStorage();
   const onEvent = jest.fn();
   try {
@@ -643,11 +625,9 @@ test('one degraded store is reported once per embed key, not once per presentati
   }
 });
 
-// Branch review, m3. `embedKey` is customer input dropped into a URL path
-// segment, and dropping `encodeURIComponent` was fully green — nothing
-// asserted the encoding at all. The failure it prevents is a key containing
-// `/` or `?` silently loading a different path (or a different origin's
-// query) instead of the widget.
+// `embedKey` is customer input dropped into a URL path segment. Without
+// `encodeURIComponent`, a key containing `/` or `?` silently loads a different path,
+// or another origin's query, instead of the widget.
 test('embedKey is percent-encoded into its one path segment', async () => {
   await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey="pk wgt/../x?y#z" />);
   expect(screen.getByTestId('mentiora-webview').props.source).toEqual({

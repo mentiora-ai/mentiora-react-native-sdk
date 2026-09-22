@@ -1,18 +1,16 @@
 /**
- * Protocol constants for mobile bridge protocol v1 (host role).
- *
- * `id` on every JSON-RPC message is a non-empty string, never a number — the
- * contract fixes this, and `guards.ts` enforces it on every inbound message.
+ * Protocol constants for mobile bridge protocol v1 (host role). The contract
+ * fixes `id` on every JSON-RPC message as a non-empty string, never a
+ * number; `guards.ts` enforces that on every inbound message.
  */
 
 export const PROTOCOL_VERSION = 1 as const;
 
-// Deliberately `readonly number[]`, not the narrower `readonly [1]`: callers
-// (Task 3) run `SUPPORTED_VERSIONS.includes(protocolVersion)` against a
-// page-supplied `number`, and a `readonly [1]` tuple rejects that argument at
-// compile time (TS2345). `as const satisfies readonly number[]` does not fix
-// this — `satisfies` checks assignability without widening the inferred type,
-// so the array stays `readonly [1]`; only an explicit type annotation widens it.
+// `readonly number[]` rather than the narrower `readonly [1]`: callers run
+// `SUPPORTED_VERSIONS.includes(protocolVersion)` against a page-supplied
+// `number`, which a `readonly [1]` tuple rejects at compile time (TS2345).
+// `as const satisfies readonly number[]` does not help — `satisfies` checks
+// assignability without widening, so only an explicit annotation widens it.
 export const SUPPORTED_VERSIONS: readonly number[] = [PROTOCOL_VERSION];
 
 export const ErrorCode = {

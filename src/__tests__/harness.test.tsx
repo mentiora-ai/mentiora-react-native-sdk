@@ -1,4 +1,3 @@
-// src/__tests__/harness.test.tsx
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { WebView } from 'react-native-webview';
 

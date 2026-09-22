@@ -23,9 +23,8 @@ test('the key is scoped per embed key so two widgets never share one', () => {
 });
 
 test('an embed key containing a dot is preserved verbatim, not parsed as a path', async () => {
-  // The key is built by template-literal concatenation, not by joining segments
-  // that are later split apart — so a dot in embedKey is just more text, never
-  // a separator. Pin both the literal key and a full round trip through it.
+  // The key is one template literal, never segments that are split apart again,
+  // so a dot in embedKey is more text and not a separator.
   assert.equal(installIdKey('pk.wgt.a'), 'mentiora.installId.pk.wgt.a');
   const s = memory();
   const id = await loadOrCreateInstallId({ storage: s, embedKey: 'pk.wgt.a', randomBytes: bytes });

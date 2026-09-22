@@ -1,4 +1,3 @@
-// src/__tests__/ErrorScreen.test.tsx
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { ErrorScreen } from '../ui/ErrorScreen';
 import { DEFAULT_STRINGS } from '../ui/strings';
@@ -62,8 +61,8 @@ test('every code renders the same sentence — the code is for onEvent, not for 
       <ErrorScreen code={code} onRetry={jest.fn()} onDismiss={jest.fn()} />,
     );
     expect(screen.getByText(DEFAULT_STRINGS.errorBody)).toBeTruthy();
-    // Present is not enough: a regression rendering <Text>{code}</Text> beside the
-    // body would pass on presence alone while leaking the code to the user (§2.9).
+    // Presence alone is not enough: rendering <Text>{code}</Text> beside the body
+    // would still pass it while leaking the code to the user.
     expect(screen.queryByText(code)).toBeNull();
     await view.unmount();
   }

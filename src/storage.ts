@@ -1,26 +1,21 @@
 /**
- * Storage resolution for the install id (design.md §2.4).
+ * Storage resolution for the install id.
  *
- * `@react-native-async-storage/async-storage` is an optional peer: a
- * consumer who never installed it must still get a working SDK, so the
- * production `load()` default wraps its `require` in a try/catch and falls
- * back to an in-memory `Map`. That fallback is `ephemeral: true` rather than
- * silently pretending to persist — losing the install id orphans every
- * thread the anonymous user created, so the caller warns (`__DEV__`) and
- * emits `onEvent` off this flag instead of staying quiet.
+ * `@react-native-async-storage/async-storage` is an optional peer, so the
+ * production `load()` wraps its `require` in a try/catch and falls back to an
+ * in-memory `Map`. The fallback is `ephemeral: true` rather than silently
+ * pretending to persist: losing the install id orphans every thread the
+ * anonymous user created, so the caller warns under `__DEV__` and emits
+ * `onEvent` off the flag.
  *
  * The ESM build (`lib/module`, `"type": "module"`) has no synchronous
- * `require` at all — `resolveStorage` is synchronous and ESM has no
- * synchronous `require`, so no source-level trick makes that build
- * auto-resolve the peer. `defaultLoad` detects this explicitly (`typeof
- * require === 'function'`, which is a safe check even when `require` is
- * unbound — `typeof` never throws on an unbound identifier) rather than
- * letting a bare `require(...)` reference throw a `ReferenceError` that a
- * `catch {}` would silently swallow as "peer not installed". `reason`
- * carries which of those actually happened, so a caller (and a later
- * `__DEV__` warning) can tell "the peer genuinely isn't installed" apart
- * from "this build cannot auto-resolve storage at all — pass `storage`
- * explicitly on `MentioraConfig`".
+ * `require` and `resolveStorage` is synchronous, so that build cannot
+ * auto-resolve the peer at all. `defaultLoad` detects it with `typeof
+ * require === 'function'` — `typeof` never throws on an unbound identifier —
+ * rather than letting a bare `require(...)` throw a `ReferenceError` that a
+ * `catch {}` would read as "peer not installed". `reason` distinguishes the
+ * two, so a caller can say "install the peer" or "pass `storage` explicitly
+ * on `MentioraConfig`" rather than the wrong one.
  */
 import type { MentioraStorage, StorageUnavailableReason } from './types.js';
 
@@ -33,17 +28,10 @@ export type StorageReason = 'override' | 'peer-loaded' | StorageUnavailableReaso
 /**
  * Whether storage persists, and why. Discriminated on `ephemeral`, so a caller
  * that has checked it gets the narrow, public `StorageUnavailableReason` from
- * the compiler rather than from a cast — `reason` and `ephemeral` can then
- * never be made to disagree (re-review, N6).
- *
- * Written out rather than built with `Omit<ResolvedStorage, 'storage'>`:
- * `Omit` over a union collapses it into ONE member with both `reason` sets
- * unioned, which is precisely the correlation this type exists to keep.
- *
- * `detail` carries the underlying error's message, when there was one
- * ('no-require', a real require failure tagged 'peer-absent', or a custom
- * `load` throwing 'load-threw') — enough for a `__DEV__` diagnostic to say
- * exactly why, without leaking non-Error throw values verbatim.
+ * the compiler rather than from a cast. Written out rather than
+ * `Omit<ResolvedStorage, 'storage'>`, which collapses the union into one
+ * member with both `reason` sets merged and loses that correlation. `detail`
+ * carries the underlying error's message when there was one.
  */
 export type StorageStatus =
   | { ephemeral: false; reason: 'override' | 'peer-loaded'; detail?: string }
@@ -68,19 +56,16 @@ class StorageLoadFailure extends Error {
 const ASYNC_STORAGE = '@react-native-async-storage/async-storage';
 
 /**
- * `hasRequire` is an injectable seam (mirrors `random.ts`'s `globalCrypto`):
- * production uses its default, real `typeof require === 'function'` check;
- * tests pass `() => false` to simulate the ESM build without needing an
- * actual ESM loader.
+ * `hasRequire` is an injectable seam (mirroring `random.ts`'s `globalCrypto`):
+ * production uses the real `typeof require === 'function'` check, tests pass
+ * `() => false` to simulate the ESM build without an ESM loader.
  */
 export const defaultLoad = (
   hasRequire: () => boolean = () => typeof require === 'function',
-  // A second seam, for the same reason `loadSafeAreaInsets` has one: how a
-  // failed require is CLASSIFIED (external review, m1) is not reachable
-  // otherwise, because the real peer is installed in this repo and never
-  // throws here. The specifier stays a literal inside the default — Metro
-  // resolves `require` statically, so a computed one is unresolvable at bundle
-  // time.
+  // A second seam: the real peer is installed in this repo and never throws,
+  // so how a failed require is classified is otherwise unreachable. The
+  // specifier stays a literal inside the default, because Metro resolves
+  // `require` statically and cannot resolve a computed one at bundle time.
   requireModule: () => { default?: MentioraStorage } = () =>
     require('@react-native-async-storage/async-storage'),
 ): MentioraStorage | null => {
@@ -94,21 +79,14 @@ export const defaultLoad = (
   try {
     return requireModule().default ?? null;
   } catch (err) {
-    // Only a MODULE_NOT_FOUND naming THIS package means the peer is absent
-    // (external review, m1). Classifying every throw as `peer-absent` told a
-    // customer to install a package they already have whenever async-storage
-    // itself failed to initialise, or was missing a transitive dependency of
-    // its own — and `peer-absent` is what the public `storageUnavailable`
-    // event carries, so the wrong advice reaches the host app, not just a log.
+    // `peer-absent` rides out on the public `storageUnavailable` event, so a
+    // misclassification tells the host app to install a package it already
+    // has. Only a MODULE_NOT_FOUND whose FIRST LINE names this package
+    // qualifies: Node's message for a transitive miss is `Cannot find module
+    // 'x'\nRequire stack:\n- …/async-storage/index.js\n- …`, so matching the
+    // whole message finds the peer that IS installed and reports it absent.
     const message = err instanceof Error ? err.message : String(err);
     const code = (err as { code?: unknown } | null)?.code;
-    // The FIRST LINE only (re-review, F11). Node's MODULE_NOT_FOUND message for
-    // a TRANSITIVE miss is `Cannot find module 'x'\nRequire stack:\n- …/@react-
-    // native-async-storage/async-storage/index.js\n- …`, so a whole-message
-    // `includes` matches the peer that IS installed and reports it absent —
-    // exactly the misclassification m1 meant to remove, and `peer-absent` is
-    // what the public `storageUnavailable` event carries, so the wrong advice
-    // reaches the host app and not just a log.
     const absent =
       code === 'MODULE_NOT_FOUND' && (message.split('\n')[0] as string).includes(ASYNC_STORAGE);
     throw new StorageLoadFailure(absent ? 'peer-absent' : 'load-threw', message);

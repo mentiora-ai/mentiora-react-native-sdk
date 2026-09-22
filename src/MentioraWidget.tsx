@@ -1,83 +1,49 @@
 /**
- * The composition root (design.md §2.1, §2.2, §2.6; plan Task 11a).
- *
- * Everything else in this package is a module with a contract and no
- * collaborators. This is the only file where they meet, and the wiring itself
- * is the risky part:
+ * The composition root. Everything else in this package is a module with a
+ * contract and no collaborators; this is the only file where they meet.
  *
  * - `react-native-webview` has exactly ONE inbound channel and ONE outbound
- *   channel. Inbound is `onMessage` — set unconditionally, because the library
- *   only injects `window.ReactNativeWebView.postMessage` into the page when a
- *   handler is present, and without it the bridge silently does not exist.
- *   Outbound is `injectJavaScript`, which reports nothing and does nothing at
- *   all if the script does not end in `true;`.
- * - The random handshake sits INSIDE the initialize handler: the page asks to
- *   initialize, we need 16 bytes for the session key, and those bytes come back
- *   from the page over a second round trip on the same channel (§2.1). So
- *   `onMessage` hands every payload to `randomSource.acceptReply` BEFORE the
- *   JSON-RPC parser — the reply is not JSON-RPC and must never reach the peer.
+ *   channel. Inbound is `onMessage`, set unconditionally: the library injects
+ *   `window.ReactNativeWebView.postMessage` into the page only when a handler
+ *   is present, and without it the bridge silently does not exist. Outbound is
+ *   `injectJavaScript`, which reports nothing and does nothing at all if the
+ *   script does not end in `true;`.
+ * - The random handshake sits INSIDE the `initialize` handler: the session key
+ *   needs 16 bytes, and those bytes come back from the page over a second
+ *   round trip on the same channel. So `onMessage` hands every payload to
+ *   `randomSource.acceptReply` BEFORE the JSON-RPC parser — the reply is not
+ *   JSON-RPC and must never reach the peer.
  *
- * One peer and one session key per WebView (they are per page load by
- * definition); storage, the install id and the identity provider come from the
- * shared per-`embedKey` runtime (§2.4). Nothing per-load is ever put on the
- * runtime.
+ * One peer and one session key per WebView, both per page load by definition.
+ * Storage, the install id and the identity provider come from the shared
+ * per-`embedKey` runtime; nothing per-load is ever put on the runtime.
  *
- * Load failure, crash recovery and the handshake watchdog are Task 11b (below).
- * Insets and the back button are Task 11c.
+ * The recovery coordinator. Three timers can be live for one page load — the
+ * network retry ladder (`onError`), the crash ladder
+ * (`onContentProcessDidTerminate` / `onRenderProcessGone`) and the handshake
+ * watchdog (no `initialize` within 8s) — and one incident can drive two of
+ * them, so ownership is fixed by three rules:
  *
- * Task 11b — the recovery coordinator (design.md §2.5, §2.9). Three
- * independent timers can all be live for the same page load — the network
- * retry ladder (`onError`), the crash ladder (`onContentProcessDidTerminate` /
- * `onRenderProcessGone`), and the handshake watchdog (no `initialize` within
- * 8s) — and without an ownership rule one incident drives two of them: an
- * `initialize` accepted at 7.9s races the still-live 8s watchdog; a crash just
- * before the watchdog expires gets doubly "recovered"; one incident can raise
- * both `onError` and `onRenderProcessGone`. So:
+ * - Every timer is tagged with the local `generation` it was armed under, and
+ *   is a no-op when it fires if that no longer matches. The counter is kept in
+ *   lockstep with the peer's via `resetLoad()` but stays separate: the peer's
+ *   is for session-key enforcement, this one for timer staleness.
+ * - `handled` gates ALL THREE ladders together, so only the first terminal
+ *   callback for a generation picks a recovery path and advances a counter.
+ * - The watchdog is (re-)armed from `onLoadEnd`, never from a ladder's own
+ *   reload, because Android's `shouldOverrideUrlLoading` is documented NOT to
+ *   run for `WebView.reload()`: `onShouldStartLoadWithRequest` never fires
+ *   there, so a recovery reload whose page never calls `initialize` again
+ *   would arm nothing, show nothing and leave no exit. iOS has no such gap
+ *   (`decidePolicyForNavigationAction` does run for a reload). Mount arms the
+ *   watchdog directly as a floor for the first load, and the watchdog's own
+ *   single reload re-arms immediately rather than waiting for `onLoadEnd`,
+ *   its rule being "one silent reload, then an unconditional recheck in 8s".
+ * - A valid `initialize` clears the watchdog SYNCHRONOUSLY, in the handler's
+ *   first line, before any `await`.
  *
- * - Every timer is tagged with the local `generation` it was armed under (a
- *   counter kept in lockstep with the peer's own via `resetLoad()`, but a
- *   separate counter — the peer's is for session-key enforcement, this one is
- *   for timer staleness). A timer whose generation no longer matches the
- *   current one is a no-op when it fires.
- * - `handled` gates ALL THREE ladders together: only the first terminal
- *   callback for a generation (network error, crash, or watchdog timeout —
- *   whichever fires first) picks a recovery path and advances a counter;
- *   every other one for that generation, of any kind, is ignored.
- * - **The watchdog is (re-)armed from `onLoadEnd`**, not from a network- or
- *   crash-ladder reload. `onLoadEnd` fires once a document has actually
- *   finished loading — successfully or not — which is what §2.9's 8s is
- *   really about: a document that has committed now has 8s to speak. Mount
- *   still arms it directly too, as a floor for the very first load. Arming
- *   from a ladder's own `reload()`/remount call instead would be a mock
- *   artifact of a different kind than it looks: the mock's `reload()` is a
- *   bare `jest.fn()` that fires no navigation callback at all, but even on
- *   a real device neither platform's own reload-triggered navigation
- *   callback is a substitute — iOS's `decidePolicyForNavigationAction` does
- *   run for a `reload()`, so `onShouldStartLoadWithRequest` would eventually
- *   re-arm it there, but Android's `shouldOverrideUrlLoading` is documented
- *   to NOT run for `WebView.reload()`, so on Android a network/crash-ladder
- *   reload that succeeds at the HTTP level but whose page never calls
- *   `initialize` again would arm nothing, show nothing, and leave no exit —
- *   exactly the trap this screen exists to prevent, reached through the
- *   recovery path that is supposed to prevent it. `onLoadEnd` has no such
- *   platform gap. The one exception is the watchdog's OWN self-triggered
- *   reload, which re-arms itself immediately (`beginFreshLoad`) rather than
- *   waiting on `onLoadEnd` first — its contract is "one silent reload, then
- *   an unconditional recheck in 8s", not "whenever this reload happens to
- *   finish". That immediate arm is not the only one: on a real device this
- *   same reload later fires its own `onLoadEnd` too, which re-arms again and
- *   supersedes it. No leak either way — `armWatchdog` clears any existing
- *   timer before setting a new one — and the second arm only ever gives the
- *   page more time to speak than the immediate one alone would, never less.
- * - A valid `initialize` clears the watchdog SYNCHRONOUSLY (the first line of
- *   the `initialize` handler below, before any `await`) — not in an effect,
- *   not after the round trip for the session-key bytes completes.
- *
- * Dismiss does not depend on any of this: it is plain component state, so it
- * still works when the peer, the runtime, or every ladder above has already
- * given up. Unmounted state is cleaned up in a `useEffect` — this is the one
- * piece of 11b that has to be an effect, since there is no synchronous "the
- * component is being torn down" hook to hang it on instead.
+ * Dismiss depends on none of this: it is plain component state, so it works
+ * when the peer, the runtime and every ladder have already given up.
  */
 import type React from 'react';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -100,8 +66,8 @@ import { SDK_NAME, SDK_VERSION } from './version.js';
 const SESSION_KEY_BYTES = 16;
 
 /**
- * Host → page framing (design.md §2.2). Two things here fail silently when
- * broken, which is why neither is inlined at the call site:
+ * Host → page framing. Two things here fail silently when broken, which is why
+ * neither is inlined at the call site:
  * - the trailing `true;`, without which `injectJavaScript` is a no-op;
  * - `JSON.stringify` of the raw JSON *string*, never concatenation. `receive`
  *   takes the same string shape the page posts back to us, so the argument is
@@ -111,42 +77,27 @@ const injection = (raw: string): string =>
   `window.mentioraHost.receive(${JSON.stringify(raw)});true;`;
 
 /**
- * Task 11c, design.md §2.7: the page takes `max(env(safe-area-inset-*),
- * --mw-host-inset-*)` and tracks `visualViewport` itself — we never claim
- * `reportsViewport` (no test below or elsewhere injects that string).
+ * The page takes `max(env(safe-area-inset-*), --mw-host-inset-*)` and tracks
+ * `visualViewport` itself; we never claim `reportsViewport`.
  *
- * We set the four `--mw-host-inset-*` custom properties ONLY when we can
- * actually measure something: `react-native-safe-area-context` when
- * present (Expo Go bundles it; `initialWindowMetrics` is filled in by the
- * native module at JS startup, so it works with no `<SafeAreaProvider>`
- * ancestor — this widget cannot assume the host mounted one), else
- * `StatusBar.currentHeight` on Android, where `env()` has no meaningful
- * value in WebView before M136. iOS needs nothing from us: with neither the
- * peer nor an Android fallback to reach for, `resolveHostInsets` returns
- * `null` and nothing is injected at all — never a fabricated `0` passed off
- * as a measurement the page would then trust as a floor.
+ * The four `--mw-host-inset-*` custom properties are set ONLY when something
+ * is actually measurable: `react-native-safe-area-context` when present (Expo
+ * Go bundles it, and `initialWindowMetrics` is filled in by the native module
+ * at JS startup, so it needs no `<SafeAreaProvider>` ancestor, which this
+ * widget cannot assume the host mounted), else `StatusBar.currentHeight` on
+ * Android, where `env()` has no meaningful value in WebView before M136. On
+ * iOS with no peer, `resolveHostInsets` returns `null` and nothing is injected
+ * — never a fabricated `0` the page would trust as a floor.
  */
 type HostInsets = { top: number; right: number; bottom: number; left: number };
 
-/**
- * `react-native-safe-area-context` is an optional peer — resolved the way
- * `storage.ts` resolves `@react-native-async-storage/async-storage`: guarded
- * on `typeof require === 'function'` first (a bare `require` is emitted
- * verbatim into the ESM build, where it has no synchronous form at all, and
- * its `ReferenceError` would otherwise be swallowed by the `catch` below as
- * "peer not installed" when the real reason is "this build cannot
- * auto-resolve a peer synchronously at all"), then a try/catch around the
- * require itself for the peer genuinely not being installed.
- */
-/** `insets.top/right/bottom/left` are interpolated straight into a CSS
- *  length (`${px}px`) with no further validation downstream — an `undefined`
- *  or non-numeric field from a peer whose shape does not match what we
- *  expect (a different major version, a mocking mistake, anything) would
- *  silently become the token `"undefinedpx"`. That is a syntactically VALID
- *  custom-property value, so nothing throws; the page's own
- *  `max(env(...), var(--mw-host-inset-top))` then fails at computed-value
- *  time and the whole padding declaration using it is dropped, not just the
- *  one side — worse than never having set the property at all. Reject the
+/** `insets.top/right/bottom/left` are interpolated straight into a CSS length
+ *  (`${px}px`) with no further validation downstream, so a non-numeric field
+ *  from a peer whose shape is not what we expect becomes the token
+ *  `"undefinedpx"`. That is a syntactically VALID custom-property value, so
+ *  nothing throws; the page's `max(env(...), var(--mw-host-inset-top))` then
+ *  fails at computed-value time and the whole padding declaration is dropped,
+ *  not just the one side — worse than never setting the property. Reject the
  *  measurement outright rather than pass any part of it through. */
 const hasValidInsets = (insets: HostInsets): boolean =>
   Number.isFinite(insets.top) &&
@@ -154,13 +105,21 @@ const hasValidInsets = (insets: HostInsets): boolean =>
   Number.isFinite(insets.bottom) &&
   Number.isFinite(insets.left);
 
+/**
+ * `react-native-safe-area-context` is an optional peer, resolved the way
+ * `storage.ts` resolves `@react-native-async-storage/async-storage`:
+ * `typeof require === 'function'` first, because a bare `require` is emitted
+ * verbatim into the ESM build where it has no synchronous form at all, and its
+ * `ReferenceError` would otherwise be caught below and misreported as "peer
+ * not installed"; then a try/catch around the require for the peer genuinely
+ * being absent.
+ */
 const loadSafeAreaInsets = (
   hasRequire: () => boolean = () => typeof require === 'function',
-  // A second injectable seam (not just `hasRequire`) so the WIRING of
-  // `hasValidInsets` into this function — not only the predicate in
-  // isolation — is directly testable: a mutation deleting the
-  // `hasValidInsets` call here is invisible to a test that only calls
-  // `hasValidInsets` itself.
+  // A second injectable seam, not just `hasRequire`, so the WIRING of
+  // `hasValidInsets` into this function is testable and not only the predicate
+  // in isolation: deleting the `hasValidInsets` call here is invisible to a
+  // test that only calls `hasValidInsets` itself.
   requireModule: () => unknown = () => require('react-native-safe-area-context'),
 ): HostInsets | null => {
   if (!hasRequire()) return null;
@@ -173,20 +132,17 @@ const loadSafeAreaInsets = (
   }
 };
 
-/** Test-only: exercises `loadSafeAreaInsets`'s OWN wiring of the malformed-
- *  measurement guard (see `hasValidInsets` above) via its `requireModule`
- *  seam, distinct from `__hasValidInsetsForTest`, which only proves the
- *  predicate itself. */
+/** Test-only: exercises `loadSafeAreaInsets`'s own wiring of the
+ *  malformed-measurement guard through its `requireModule` seam, which
+ *  `__hasValidInsetsForTest` cannot reach. */
 export const __loadSafeAreaInsetsForTest = loadSafeAreaInsets;
 
 /**
- * `load` is an injectable seam (mirrors `storage.ts`'s `resolveStorage`
- * accepting `load`, and `random.ts`'s `globalCrypto`) so the Android
- * fallback and the "nothing measurable" branch are each directly testable
- * without fighting Jest's module cache for a peer that either is or is not
- * actually installed in a given run — `__resolveHostInsetsForTest` below is
- * the test-only hook onto it. Production always calls this with no
- * arguments, i.e. the real `loadSafeAreaInsets`.
+ * `load` is an injectable seam (as in `storage.ts`'s `resolveStorage` and
+ * `random.ts`'s `globalCrypto`) so the Android fallback and the "nothing
+ * measurable" branch are each testable without fighting Jest's module cache
+ * over a peer that may or may not be installed in a given run. Production
+ * always calls this with no arguments.
  */
 const resolveHostInsets = (
   load: () => HostInsets | null = loadSafeAreaInsets,
@@ -198,21 +154,20 @@ const resolveHostInsets = (
   return null; // iOS, no peer: nothing to measure, nothing to inject
 };
 
-/** Test-only (mirrors `runtime.ts`'s `__resetRuntimes`): exercises the
- *  branch logic in `resolveHostInsets` directly. */
+/** Test-only: the branch logic in `resolveHostInsets`. */
 export const __resolveHostInsetsForTest = resolveHostInsets;
 
-/** Test-only: the malformed-measurement guard lives inside `loadSafeAreaInsets`
- *  (never inside `resolveHostInsets`, which trusts whatever `load()` returns),
- *  so it needs its own direct hook rather than being reachable through
- *  `__resolveHostInsetsForTest`'s injected `load`. */
+/** Test-only: the malformed-measurement guard lives inside
+ *  `loadSafeAreaInsets`, never inside `resolveHostInsets`, which trusts
+ *  whatever `load()` returns — so it needs its own hook rather than being
+ *  reachable through `__resolveHostInsetsForTest`'s injected `load`. */
 export const __hasValidInsetsForTest = hasValidInsets;
 
 /**
  * A plain style write, not a bridge message — `window.mentioraHost.receive`
- * does not apply here — but it keeps `injection`'s own two invariants:
- * every interpolated value goes through `JSON.stringify`, and the script
- * ends in `true;`.
+ * does not apply — but it keeps `injection`'s two invariants: every
+ * interpolated value goes through `JSON.stringify`, and the script ends in
+ * `true;`.
  */
 const hostInsetsScript = (insets: HostInsets): string => {
   const set = (name: string, px: number): string =>
@@ -233,7 +188,7 @@ const hostInsetsScript = (insets: HostInsets): string => {
  * (`WebViewShared.tsx`, `createOnShouldStartLoadWithRequest`) — so `intent:`,
  * `file:` and friends would reach the OS without passing `isAllowedExternal`.
  * This is not the origin gate; `isSameOrigin` is, and `originWhitelist` could
- * not be it anyway, being prefix-anchored (§2.6).
+ * not be, being prefix-anchored.
  */
 const ALL_ORIGINS = ['*'];
 
@@ -253,9 +208,9 @@ type TerminatedEvent = Parameters<NonNullable<WebViewProps['onContentProcessDidT
 type RenderProcessGoneEvent = Parameters<NonNullable<WebViewProps['onRenderProcessGone']>>[0];
 type LoadEndEvent = Parameters<NonNullable<WebViewProps['onLoadEnd']>>[0];
 
-/** design.md §2.9: load failure — 3 attempts (an immediate first try, then
- *  ~1s and ~2s with full jitter), cap 8s, then the error surface. Reused
- *  as-is via `retry.ts`'s `delaysFor` rather than a second backoff formula. */
+/** Load failure: 3 attempts (an immediate first try, then ~1s and ~2s with
+ *  full jitter), cap 8s, then the error surface. Reuses `retry.ts`'s
+ *  `delaysFor` rather than a second backoff formula. */
 const LOAD_RETRY_POLICY: RetryPolicy = {
   attempts: 3,
   baseMs: 1000,
@@ -263,12 +218,11 @@ const LOAD_RETRY_POLICY: RetryPolicy = {
   totalBudgetMs: 8000,
 };
 
-/** design.md §2.5: "bounded at 3 automatic recoveries with backoff, then the
- *  error surface" — 3 recoveries plus the incident that gives up is 4 total,
- *  matching `RetryPolicy.attempts`'s "total tries" meaning the load ladder
- *  above already uses. Shared by BOTH `onContentProcessDidTerminate` and
- *  `onRenderProcessGone` (§2.5: "Either way ... a fresh session key is
- *  issued" — one counter, one cap, regardless of which callback fired). */
+/** Bounded at 3 automatic crash recoveries with backoff, then the error
+ *  surface: 3 recoveries plus the incident that gives up is the 4 total that
+ *  `RetryPolicy.attempts` means here, as in the load ladder above. One counter
+ *  and one cap shared by BOTH `onContentProcessDidTerminate` and
+ *  `onRenderProcessGone`, whichever fired. */
 const CRASH_RETRY_POLICY: RetryPolicy = {
   attempts: 4,
   baseMs: 1000,
@@ -276,17 +230,16 @@ const CRASH_RETRY_POLICY: RetryPolicy = {
   totalBudgetMs: 8000,
 };
 
-/** design.md §2.9: "Handshake timeout is not a network failure and does not
- *  use that ladder... One silent reload(), then the error surface with a
- *  distinct code." No jitter, no backoff — a single unconditional recheck. */
+/** A handshake timeout is not a network failure and does not use that ladder:
+ *  one silent `reload()`, then the error surface with a distinct code. No
+ *  jitter, no backoff — a single unconditional recheck. */
 const HANDSHAKE_WATCHDOG_MS = 8000;
 const HANDSHAKE_RECOVERY_CAP = 1;
 
-/** Which runtimes have already reported degraded storage (§2.4). Keyed on the
- *  runtime object, which `getRuntime` memoises per embed key and never
- *  rebuilds, so this is "once per embed key" without a registry to clear — a
- *  `__resetRuntimes()` produces fresh objects and the old entries fall out of
- *  the WeakSet with them. */
+/** Which runtimes have already reported degraded storage. Keyed on the runtime
+ *  object, which `getRuntime` memoises per embed key and never rebuilds, so
+ *  this is "once per embed key" with no registry to clear: `__resetRuntimes()`
+ *  produces fresh objects and the old entries fall out of the WeakSet. */
 const warnedRuntimes = new WeakSet<MentioraRuntime>();
 
 /** Embed the widget inline. Renders no chrome: the page draws its own header. */
@@ -301,9 +254,9 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       // (Node has had WebCrypto since v19, which would make the core suite take
       // the fast path in every test that means to exercise the inject path).
       // The composition root is the only place that knows whether a `crypto`
-      // here is a real host polyfill, and in React Native it is one only if the
-      // app installed it. When it is, the 2 s round trip comes out of the 8 s
-      // handshake budget.
+      // here is a real host polyfill, which in React Native means the app
+      // installed one. Without it, the page round trip for random bytes costs
+      // up to 2s of the 8s handshake budget.
       // Cast at the seam: lib.dom / @types/node type `getRandomValues` as a
       // generic over every non-float TypedArray, which is not assignable to
       // `RandomDeps`'s deliberately narrow `(a: Uint8Array) => …`. The call is
@@ -317,9 +270,9 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
 
   // Called on every render, by design: `getRuntime` is keyed on `embedKey` and
   // swaps `runtime.identity` IN PLACE when a later call passes a different
-  // `identity` reference (runtime.ts, last-config-wins). Everything below reads
+  // `identity` reference (runtime.ts, last config wins). Everything below reads
   // `runtime.identity` live for the same reason — a local copy goes stale after
-  // a reconfigure and this widget keeps calling a provider nobody is configured
+  // a reconfigure, leaving this widget calling a provider nobody is configured
   // to use.
   const runtime = getRuntime(props);
 
@@ -335,7 +288,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   /** The one external-link decision, shared by the `openUrl` request and by
    *  every navigation we deny. `Linking.openURL` hands straight to
    *  `UIApplication.openURL` / `Intent.ACTION_VIEW` with no validation of its
-   *  own, so `isAllowedExternal` is the whole gate (§2.6). */
+   *  own, so `isAllowedExternal` is the whole gate. */
   const openExternal = useCallback(async (url: string): Promise<void> => {
     const { onOpenUrl, onEvent } = latest.current.props;
     if (onOpenUrl?.(url) === true) {
@@ -347,23 +300,21 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     await Linking.openURL(url);
   }, []);
 
-  // Task 11c: does the page currently hold the hardware back button? Read
-  // fresh on every press (see `onHardwareBack` below) rather than trusted at
-  // face value — `peer.sessionKey()` is what actually proves a hold is still
-  // live, since a reload/remount resets it synchronously and this ref alone
-  // does not.
+  // Does the page currently hold the hardware back button? Never trusted at
+  // face value: `peer.sessionKey()`, re-read on every press (see
+  // `onHardwareBack` below), is what proves a hold is still live, since a
+  // reload/remount resets it synchronously and this ref alone does not.
   const backHeld = useRef(false);
 
   /** The top-frame URL this WebView last committed to, so a fragment-only
-   *  navigation can be told apart from a real one (external review, M1). A
-   *  ref, not state: it is read and written inside a navigation callback and
-   *  must never schedule a render. */
+   *  navigation can be told apart from a real one. A ref, not state: it is read
+   *  and written inside a navigation callback and must never schedule a
+   *  render. */
   const lastTopUrl = useRef<string | null>(null);
 
-  // Task 12 (fix round 3): non-null only when a `<MentioraHost />`'s Modal is
-  // an ancestor — `back-channel.ts`'s own header has the full reasoning. An
-  // inline widget with no such ancestor gets `null` here and this is a no-op
-  // everywhere below; it keeps using `BackHandler` exactly as before.
+  // Non-null only when a `<MentioraHost />`'s Modal is an ancestor;
+  // `back-channel.ts`'s header has the reasoning. An inline widget gets `null`
+  // here, every use below is then a no-op, and it keeps using `BackHandler`.
   const registerBackPress = useContext(BackChannelContext);
 
   const peerRef = useRef<HostPeer | undefined>(undefined);
@@ -372,28 +323,26 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       send: (raw) => webview.current?.injectJavaScript(injection(raw)),
       handlers: {
         initialize: async () => {
-          // Cleared SYNCHRONOUSLY, before the first `await` below — not in an
-          // effect, not after the random-bytes round trip. This runs inside
-          // `peer.receive`'s synchronous prefix (up to its own first await),
-          // which itself runs inside `onMessage`'s synchronous dispatch, so it
-          // executes in the same tick `fireEvent`/the real bridge message
-          // arrives in. A page that posts `initialize` at 7.9s must disarm the
-          // 8s watchdog before it can race a handshake that is about to
-          // succeed (11b, "one recovery coordinator per load generation").
+          // Cleared SYNCHRONOUSLY, before the first `await` below. This runs
+          // inside `peer.receive`'s synchronous prefix, itself inside
+          // `onMessage`'s synchronous dispatch, so it executes in the tick the
+          // bridge message arrives in: a page that posts `initialize` at 7.9s
+          // disarms the 8s watchdog before it can race a handshake that is
+          // about to succeed.
           clearWatchdogTimer();
           // Captured before the first await, so a handler whose document has
           // since been replaced mutates nothing — the same rule `peer.receive`
-          // keeps for its own sends (§2.2: "work from the old generation may
-          // neither mutate state nor send").
+          // keeps for its own sends: work from an old generation may neither
+          // mutate state nor send.
           const myGen = generation.current;
           try {
-            // The session key comes first and alone: it shares the single-in-flight
-            // random source with the install id, so those two cannot overlap. But
-            // identity never touches `randomBytes`, and serialising all three spends
-            // 2 s + 2 s + BOOT_RETRY_POLICY's 4 s = exactly the 8 s the page bounds
-            // the handshake by (design.md:238) — a slow identity endpoint would then
-            // surface as 11b's `handshake_timeout` instead of chat. Overlapping the
-            // last two gives up to 2 s of that back.
+            // The session key comes first and alone: it shares the
+            // single-in-flight random source with the install id, so those two
+            // cannot overlap. Identity never touches `randomBytes`, and
+            // serialising all three spends 2s + 2s + `BOOT_RETRY_POLICY`'s 4s =
+            // exactly the 8s the page bounds the handshake by, so a slow
+            // identity endpoint would surface as `handshake_timeout` instead of
+            // chat. Overlapping the last two gives up to 2s of that back.
             const sessionKey = toBase64Url(await randomSource.bytes(SESSION_KEY_BYTES));
             const { runtime: live } = latest.current;
             const [installId, identityToken] = await Promise.all([
@@ -402,31 +351,25 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
               live.installId(randomSource.bytes),
               live.identity.initial(),
             ]);
-            // A page that gets THIS FAR is proof that the TRANSPORT works, so a
-            // transient blip long ago does not count against a page that has
-            // since loaded cleanly — the network counter and the watchdog
-            // counter reset. Reset here, on the success path, and never at the
-            // top of the handler: a handler about to reject has proved nothing,
-            // and zeroing the watchdog's own counter on the way to failing
-            // turns the catch below into an unbounded reload loop rather than
-            // the one-reload-then-error path it hands the incident to.
+            // A page that gets THIS FAR proves the transport works, so a blip
+            // long ago does not count against a page that has since loaded
+            // cleanly. Success path only: zeroing the watchdog's counter on the
+            // way to a rejection turns the catch below into an unbounded reload
+            // loop instead of one-reload-then-error.
             //
-            // `crashFailures` deliberately does NOT reset (branch review, M1).
-            // A handshake is not proof the renderer will survive, and §2.5's
-            // bound exists for `react-native-webview`#1767 — a page that
-            // crashes deterministically. Such a page boots fine and dies later,
-            // when it renders the thread, so it would clear its own crash
-            // budget on the way past on every cycle and the bound would not
-            // exist for exactly the page it was written for: an unbounded
-            // remount-plus-full-page-load loop, forever, on battery. `Retry`
-            // (`restartLoad`) is the explicit way to buy a fresh crash budget.
+            // `crashFailures` deliberately does NOT reset. A page that crashes
+            // deterministically (`react-native-webview`#1767) boots fine and
+            // dies later, when it renders the thread, so resetting here would
+            // clear its crash budget every cycle and leave it remounting and
+            // reloading forever on battery. Retry (`restartLoad`) is the
+            // explicit way to buy a fresh crash budget.
             if (generation.current === myGen) {
               networkFailures.current = 0;
               handshakeTimeouts.current = 0;
             }
-            // Never `-32005`, whatever version the page asked for: we answer our
-            // own, so a frozen v0 binary can still serve a future page that lists
-            // v1 among its versions (design.md §2.2, Revision 1).
+            // Never `-32005`, whatever version the page asked for: we answer
+            // our own, so a frozen v0 binary can still serve a future page that
+            // lists v1 among its versions.
             return {
               protocolVersion: PROTOCOL_VERSION,
               sessionKey,
@@ -435,29 +378,22 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
               sdk: { name: SDK_NAME, version: SDK_VERSION },
             };
           } catch (e) {
-            // Branch review, C2. The watchdog above is disarmed SYNCHRONOUSLY —
-            // correct for the 7.9s race it was written for, fatal when the
-            // handler then rejects: the peer answers `-32603` and keeps its
-            // latch (so a page that retries `initialize` gets `-32600`),
-            // `handled` is still false so no ladder has claimed the incident,
-            // and nothing re-arms the watchdog because `onLoadEnd` already
-            // fired for this document and will not fire again. That leaves the
-            // widget permanently dead with no surface, no event and no way
-            // back — for exactly the case §2.3 names (a signed-in install whose
-            // token endpoint is down, where the handshake MUST fail into §2.9's
-            // Retry screen rather than answer without a token), and equally for
-            // a `bytes()` timeout (§2.1) or a storage rejection. Re-arming hands
-            // the incident to the watchdog's own one-reload-then-error path,
-            // which ends at that screen.
+            // The watchdog above is disarmed SYNCHRONOUSLY, which is right for
+            // the 7.9s race and fatal once the handler rejects: the peer answers
+            // `-32603` and keeps its latch, `handled` is still false so no
+            // ladder has claimed the incident, and `onLoadEnd` has already fired
+            // for this document and will not fire again. Without the re-arm
+            // below the widget is permanently dead with no surface, no event and
+            // no way back — for a signed-in install whose token endpoint is
+            // down, for a `bytes()` timeout, for a storage rejection. Re-arming
+            // hands the incident to the watchdog's one-reload-then-error path,
+            // which ends at the Retry screen.
             //
-            // Name the real cause while the developer can still act on it
-            // (re-review, F12). `peer.ts` answers every handler rejection
-            // `-32603 Internal error` — the protocol's, not ours to change —
-            // and the page turns that into a silent ~16s wait and then a Retry
-            // screen that can never succeed. The one failure that has a fix
-            // the developer must be told about is an install marked
-            // `wasSignedIn` with no identity configured: what they need is
-            // `Mentiora.logout()`, and nothing anywhere said so.
+            // `peer.ts` answers every handler rejection `-32603 Internal error`,
+            // which the page turns into a silent ~16s wait and then a Retry
+            // screen that can never succeed. The one failure with a fix the
+            // developer must be told about is an install marked `wasSignedIn`
+            // with no identity configured.
             if (__DEV__ && e instanceof IdentityUnavailable) {
               console.warn(
                 `mentiora identity: ${e.message}. The handshake will fail until an ` +
@@ -473,10 +409,10 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
           try {
             return { identityToken: await latest.current.runtime.identity.refresh() };
           } catch {
-            // EVERY rejection, not just `IdentityUnavailable`. `refresh()` has one
-            // job, so any way it can fail means the same thing to the page, and
-            // `-32002` is the answer design.md:238 asks for. Narrowing to the one
-            // class would make a future plain `throw` inside identity.ts silently
+            // EVERY rejection, not just `IdentityUnavailable`. `refresh()` has
+            // one job, so any way it can fail means the same thing to the page,
+            // and `-32002` is the answer it wants. Narrowing to the one class
+            // would make a future plain `throw` inside identity.ts silently
             // downgrade to `-32603`, which the page reads as a bug on our side
             // rather than as "ask again later".
             throw new BridgeError(ErrorCode.identityUnavailable, 'Identity unavailable');
@@ -500,55 +436,46 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   }
   const peer = peerRef.current;
 
-  // -- 11b: the recovery coordinator -----------------------------------
+  // -- The recovery coordinator ----------------------------------------
   //
-  // State only, never re-derived: refs so a scheduled timer's closure always
-  // reads the CURRENT counts/generation through `.current`, not whatever they
-  // were when that timer was scheduled. `errorCode`, `dismissed` and
-  // `remountKey` are the only pieces that need to trigger a re-render, so
-  // they alone are `useState`.
+  // Refs, so a scheduled timer's closure always reads the CURRENT
+  // counts/generation through `.current` rather than whatever they were when
+  // that timer was scheduled. `errorCode`, `dismissed` and `remountKey` are the
+  // only pieces that need to trigger a re-render, so they alone are
+  // `useState`.
   const [errorCode, setErrorCode] = useState<MentioraErrorCode | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [remountKey, setRemountKey] = useState(0);
 
-  // Task 12 (fix round 3, Major 8): design.md §2.4's "logout() ... reloads
-  // whichever widgets are mounted" applies to EVERY mounted widget, inline or
-  // Modal-hosted — subscribing HERE, not in the presenter, is what covers
-  // both. `runtime` (not `latest.current.runtime`) as the dependency: it's
-  // the SAME object across renders for a given `embedKey` (`getRuntime`
-  // memoises per key and only swaps `runtime.identity` in place), so this
-  // resubscribes only if the embed key itself changes, never on every render.
+  // A logout reloads EVERY mounted widget, inline or Modal-hosted, which is why
+  // the subscription lives here and not in the presenter. `runtime`, not
+  // `latest.current.runtime`, as the dependency: it is the same object across
+  // renders for a given `embedKey`, so this resubscribes only when the embed
+  // key changes.
   //
-  // A logout is THE SAME EVENT Retry is — a user-initiated fresh start for
-  // this widget — so it runs the same `restartLoad` (fix round 5), not a
-  // hand-rolled subset of it. Fix round 4 gave this path the load boundary it
-  // was missing (Critical 1: without `peer.resetLoad()` the fresh page's
-  // `initialize` takes `-32600 "initialize already completed for this page
-  // load"`, that rejection is stamped with the PRE-LOGOUT session key, and a
-  // stale `backHeld` plus that still-authorized key let `onHardwareBack`
-  // claim back presses into the post-logout page); round 5 gave it the other
-  // two things Retry does, for the same reason — see `restartLoad` below.
+  // It runs the whole of `restartLoad`, not a subset. Without the load boundary
+  // `restartLoad` crosses, the fresh page's `initialize` takes `-32600
+  // "initialize already completed for this page load"`, that rejection is
+  // stamped with the PRE-LOGOUT session key, and a stale `backHeld` plus that
+  // still-authorized key let `onHardwareBack` claim back presses into the
+  // post-logout page.
   //
-  // Reached through a ref (declared here, assigned below once `restartLoad`
-  // exists) rather than captured directly, so this effect keeps depending on
-  // `runtime` alone — a plain capture would make `restartLoad`, rebuilt every
-  // render, a dependency and resubscribe the reload listener on every render.
+  // Reached through a ref (assigned below, once `restartLoad` exists) so this
+  // effect depends on `runtime` alone; capturing `restartLoad` directly would
+  // resubscribe on every render, since it is rebuilt each time.
   useEffect(() => {
     return runtime.onReload(() => restart.current());
   }, [runtime]);
 
-  // design.md §2.4, the half nothing implemented (branch review, M2):
-  // `resolveStorage` has always computed `ephemeral`/`reason` and the runtime
-  // has always carried them, but no caller read either, so the SDK fell back
-  // to in-memory storage in silence. Without persistence every launch mints a
-  // new anonymous user and no thread survives, which is a support ticket
-  // ("customers keep losing their history") with no signal attached.
+  // The only reader of `resolveStorage`'s `ephemeral`/`reason`, which the
+  // runtime carries. Without persistence every launch mints a new anonymous
+  // user and no thread survives, so this is the signal behind "customers keep
+  // losing their history".
   //
-  // Both halves, because `__DEV__` is stripped from release bundles: a warning
-  // alone makes this invisible exactly where it costs money, so the event is
-  // what a release build can see. Once per runtime — i.e. per embed key —
-  // since the Modal mounts a fresh widget on every `open()` and one degraded
-  // store is one fact, not one per presentation.
+  // Both a warning and an event, because `__DEV__` is stripped from release
+  // bundles and the event is what a release build can see. Once per runtime,
+  // i.e. per embed key: the Modal mounts a fresh widget on every `open()`, and
+  // one degraded store is one fact.
   useEffect(() => {
     if (!runtime.storage.ephemeral || warnedRuntimes.has(runtime)) return;
     warnedRuntimes.add(runtime);
@@ -562,15 +489,15 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       );
     latest.current.props.onEvent?.({ type: 'storageUnavailable', reason });
   }, [runtime]);
-  /** Assigned during render, further down, right after `restartLoad` is
-   *  defined — the effect above runs after commit, so it always calls a real
-   *  function, never this placeholder. */
+  /** Assigned during render, right after `restartLoad` is defined. The effect
+   *  above runs after commit, so it always calls a real function, never this
+   *  placeholder. */
   const restart = useRef<() => void>(() => {});
 
   const generation = useRef(0);
   // Has THIS generation already had its one terminal callback? Shared across
-  // all three ladders — an incident that raises two callbacks (design.md's
-  // own example) must advance exactly one counter, not two.
+  // all three ladders: an incident that raises two callbacks must advance
+  // exactly one counter, not two.
   const handled = useRef(false);
   const networkFailures = useRef(0);
   const crashFailures = useRef(0);
@@ -603,31 +530,29 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     latest.current.props.onEvent?.({ type: 'error', code });
   };
 
-  /** A load boundary for OUR OWN bookkeeping, kept in lockstep with the
-   *  peer's (`resetLoad`) rather than reusing its counter — that one is for
-   *  session-key enforcement, this one is for timer staleness. Cancels
-   *  whatever is currently ticking; it does NOT arm a new watchdog — see
-   *  `armWatchdog`'s own doc for why a network/crash reload must not. */
+  /** A load boundary for OUR OWN bookkeeping, kept in lockstep with the peer's
+   *  (`resetLoad`) rather than reusing its counter — that one is for
+   *  session-key enforcement, this one for timer staleness. Cancels whatever is
+   *  currently ticking; it does NOT arm a new watchdog, for the reason in
+   *  `armWatchdog`'s own doc. */
   const advanceGeneration = (): void => {
     peer.resetLoad();
     // A back-button hold belongs to the DOCUMENT that claimed it, and this is
-    // the point where that document stops existing. `peer.resetLoad()` alone
-    // only covers the window between here and the replacement page's own
-    // `initialize`: the moment that handshake lands, `peer.sessionKey()` is
-    // non-null again and a `backHeld` left over from the previous document
-    // would be trusted for the rest of the widget's life — every press
-    // claimed and forwarded to a page that never asked for the button, with
-    // the Modal unable to close and no visible reason why (branch review,
-    // C1). The page re-claims it with a fresh `mentiora/backHandling` if it
-    // still wants it.
+    // where that document stops existing. `peer.resetLoad()` alone only covers
+    // the window until the replacement page's own `initialize`: the moment that
+    // handshake lands, `peer.sessionKey()` is non-null again and a `backHeld`
+    // left over from the previous document is trusted for the rest of the
+    // widget's life — every press claimed and forwarded to a page that never
+    // asked for the button, with the Modal unable to close and no visible
+    // reason why. The page re-claims it with a fresh `mentiora/backHandling` if
+    // it still wants it.
     backHeld.current = false;
-    // design.md §2.2, verbatim: "A reset invalidates every in-flight `receive`
-    // AND every parked random-bytes resolver." `peer.resetLoad()` is the first
-    // half; this is the second. Without it a `bytes()` left pending by the
-    // dead document holds the single-in-flight slot for the rest of its 2 s
-    // timeout, and the replacement page's `initialize` is rejected on its very
-    // first line — the recovery handshake poisoned by the load boundary that
-    // was supposed to produce it (branch review, C3).
+    // A reset invalidates every in-flight `receive` AND every parked
+    // random-bytes resolver. `peer.resetLoad()` is the first half, this is the
+    // second: without it a `bytes()` left pending by the dead document holds
+    // the single-in-flight slot for the rest of its 2s timeout, and the
+    // replacement page's `initialize` is rejected on its very first line — the
+    // recovery handshake poisoned by the load boundary meant to produce it.
     randomSource.reset();
     generation.current += 1;
     handled.current = false;
@@ -635,22 +560,13 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     clearWatchdogTimer();
   };
 
-  /** Arms the handshake watchdog for the CURRENT generation: 8s for the page
-   *  to call `initialize`, starting now. Called from mount (a floor for the
-   *  very first load), from an allowed top-frame navigation, from
-   *  `onLoadEnd` (the real, platform-uniform re-arm point — see the header
-   *  comment for why a network/crash reload's own `reload()`/remount call
-   *  must NOT arm this directly), and from the watchdog's own single
-   *  self-triggered reload, which re-arms itself immediately rather than
-   *  waiting on that reload's own `onLoadEnd` first — its contract is "one
-   *  silent reload, then an unconditional recheck in 8s". That immediate arm
-   *  is not the last word: the same reload's own `onLoadEnd`, once it fires,
-   *  re-arms again and supersedes it, harmlessly (this function always
-   *  clears any existing timer first) and only ever more patiently, never
-   *  less. A network/crash reload still goes through `advanceGeneration`, so
-   *  the watchdog that was ticking for the load that just failed is
-   *  cancelled — just not replaced until that reload's own `onLoadEnd`
-   *  arrives. */
+  /** Arms the handshake watchdog for the CURRENT generation: 8s for the page to
+   *  call `initialize`, starting now. Called from mount, from an allowed
+   *  top-frame navigation, from `onLoadEnd`, and from the watchdog's own single
+   *  reload (see the file header). A network/crash reload goes through
+   *  `advanceGeneration`, so the watchdog ticking for the failed load is
+   *  cancelled and not replaced until that reload's `onLoadEnd` arrives. Always
+   *  clears any existing timer first, so an extra arm is harmless. */
   const armWatchdog = (): void => {
     clearWatchdogTimer();
     const gen = generation.current;
@@ -675,8 +591,8 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   };
 
   /** Schedules the ladder's own reload/remount `delayMs` from now, tagged to
-   *  the CURRENT generation. When it fires, it advances the generation itself
-   *  (never the watchdog's job) and then runs `action`. */
+   *  the CURRENT generation. When it fires it advances the generation itself —
+   *  never the watchdog's job — and then runs `action`. */
   const scheduleRecovery = (delayMs: number, action: () => void): void => {
     clearRecoveryTimer();
     const gen = generation.current;
@@ -688,43 +604,35 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     }, delayMs);
   };
 
-  // Mount arms the initial watchdog — no `advanceGeneration` call, for the same
-  // reason 11a's `onShouldStartLoadWithRequest` never calls `resetLoad()` on
-  // mount: a freshly built peer already IS generation 0.
+  // Mount arms the initial watchdog with no `advanceGeneration` call: a freshly
+  // built peer already IS generation 0.
   //
-  // From the EFFECT, never the render body (re-review, F7). A `setTimeout` in
-  // render is guarded by a ref that only proves "this hooks list has armed
-  // once" — it says nothing about whether the render ever committed. A render
-  // that is thrown away (a `<Suspense>` sibling suspending on first mount, an
-  // interrupted transition, React 18's StrictMode double render, which rebuilds
-  // the hooks list) leaves a live timer nobody owns: its closure still holds
-  // the real host's `onEvent`, so ~16s later the host is handed
-  // `{type:'error', code:'handshake_timeout'}` for a widget that handshook
-  // fine at t≈0. An effect runs after commit and before any `onLoadEnd`, so the
-  // floor's contract is unchanged — and under StrictMode the cleanup clears and
-  // the re-run re-arms, which is what puts the 8s floor back for the dev
-  // default (the simulated unmount used to remove it for good).
+  // From the EFFECT, never the render body. A `setTimeout` in render can only be
+  // guarded by a ref that proves "this hooks list has armed once", which says
+  // nothing about whether the render committed; a discarded render (a
+  // `<Suspense>` sibling suspending, an interrupted transition, StrictMode's
+  // double render, which rebuilds the hooks list) leaves a live timer nobody
+  // owns, whose closure still holds the real host's `onEvent` — ~16s later the
+  // host is handed `{type:'error', code:'handshake_timeout'}` for a widget that
+  // handshook fine at t≈0. An effect runs after commit and before any
+  // `onLoadEnd`, so the floor is unchanged.
   //
   // Guarded on `peer.sessionKey() === null` so an `<Activity>`/Offscreen
   // re-show, which tears effects down and sets them up again without
   // re-rendering, does not arm a fresh watchdog over a handshake that already
   // landed — that page will never post `initialize` again.
   //
-  // The cleanup also retires the generation (re-review, F8). Clearing the
-  // timers that exist AT THAT MOMENT is not enough: an `initialize` still
-  // awaiting `randomSource.bytes()` (2s), `identity.initial()` (up to 4s) or an
+  // The cleanup retires the generation as well as the timers: an `initialize`
+  // still awaiting `randomSource.bytes()`, `identity.initial()` or an
   // install-id mint rejects afterwards, passes its own `generation.current ===
-  // myGen` check, and re-arms the watchdog on a dead instance — 8s later a
-  // `reload()` into a nulled ref, 8s after that the same spurious
-  // `handshake_timeout` to the host, for a chat the user already closed.
-  // Bumping the counter is what makes every existing generation check retire
-  // the in-flight handler and any timer it would arm.
+  // myGen` check and re-arms the watchdog on a dead instance — a `reload()`
+  // into a nulled ref, then a spurious `handshake_timeout` to the host for a
+  // chat the user already closed.
   //
-  // Clears the refs directly (not via `clearWatchdogTimer`/`clearRecoveryTimer`,
-  // which are plain functions rebuilt every render and so would either force
-  // this effect to rerun on every render or fail exhaustive-deps) — `useRef`
-  // objects are themselves stable, so reading `.current` here needs no
-  // dependency at all.
+  // It clears the refs directly rather than through
+  // `clearWatchdogTimer`/`clearRecoveryTimer`, which are rebuilt every render
+  // and would force this effect to rerun or fail exhaustive-deps; `useRef`
+  // objects are stable, so reading `.current` needs no dependency.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only; `peer` and `armWatchdog` read refs that are stable for this instance
   useEffect(() => {
     if (peer.sessionKey() === null) armWatchdog();
@@ -735,17 +643,16 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     };
   }, []);
 
-  /** design.md §2.9: the real, platform-uniform re-arm point — a document
-   *  that has finished loading, successfully or not, has 8s to speak. See
-   *  the file header for why a ladder's own reload must not arm this
-   *  directly instead. */
+  /** The platform-uniform re-arm point: a document that has finished loading,
+   *  successfully or not, has 8s to speak. See the file header for why a
+   *  ladder's own reload must not arm the watchdog instead. */
   const onLoadEnd = (_event: LoadEndEvent): void => {
     armWatchdog();
   };
 
-  /** design.md §2.9: suppress the library's own error view and run the load
-   *  ladder instead — 3 attempts total (this one plus up to 2 more), ~1s then
-   *  ~2s with full jitter, then the error surface. */
+  /** Suppress the library's own error view and run the load ladder instead: 3
+   *  attempts total (this one plus up to 2 more), ~1s then ~2s with full
+   *  jitter, then the error surface. */
   const onError = (event: ErrorEvent): void => {
     event.preventDefault?.();
     onTerminal(() => {
@@ -759,10 +666,9 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     });
   };
 
-  /** design.md §2.5: one counter, one cap, shared by both crash callbacks —
-   *  `recover` is the one difference (`reload()` for iOS, a remount-key bump
-   *  for Android, since a dead Android renderer must be removed from the
-   *  hierarchy, never reused). */
+  /** One counter and one cap, shared by both crash callbacks; `recover` is the
+   *  only difference — `reload()` on iOS, a remount-key bump on Android, where
+   *  a dead renderer must be removed from the hierarchy and never reused. */
   const recoverFromCrash = (recover: () => void): void => {
     onTerminal(() => {
       crashFailures.current += 1;
@@ -784,42 +690,27 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   };
 
   /** A fresh, user-requested attempt: clear the surface, give every ladder a
-   *  clean slate, treat it exactly like a new top-level load, and actually
-   *  make it try again. Always a remount (the `key` bump), never a bare
-   *  `reload()`: `renderer_crashed` can be what's showing, and `reload()` on
-   *  a renderer Android already killed is not a repair, it's the same dead
-   *  instance asked to do the one thing Android's own docs say it cannot —
-   *  a remount is correct for every code, not just that one.
+   *  clean slate, cross a load boundary and make the page try again. Always a
+   *  remount (the `key` bump), never a bare `reload()`, because
+   *  `renderer_crashed` can be what is showing and Android's own docs say a
+   *  killed renderer cannot be reused.
    *
-   *  Two callers, deliberately the same function (fix round 5): the error
-   *  screen's Retry button, and `runtime.onReload` (i.e. `Mentiora.logout()`).
-   *  A logout is at least as much a fresh start as Retry — a different user,
-   *  a rotated install id, a page loaded from scratch — so every piece of
-   *  this applies to it:
-   *  - `setErrorCode(null)`: without it, logging out while the error surface
-   *    is up leaves "something went wrong" covering a healthy, freshly
-   *    rotated page until the user happens to press Retry, which is the one
-   *    control that looks like the only way forward on a page that is
-   *    already fine. That was the user-visible bug this round fixed.
-   *  - the three counters: leaving them would be a half fresh start — the
-   *    post-logout page would inherit the previous user's spent budget and
-   *    could go straight back to the error surface on its first hiccup, with
-   *    no silent recovery, which is precisely the state the line above just
-   *    cleared. (A successful `initialize` resets all three anyway, so this
-   *    only ever matters for a post-logout page that itself struggles —
-   *    exactly the case where inheriting is worst.)
-   *  - `setDismissed(false)` (re-review, N5): Retry cannot reach this line
-   *    while dismissed (the button it lives on is not rendered), so this only
-   *    ever affects the logout path — where leaving it set made the "fresh
-   *    start" a fiction. `dismissed` is never cleared anywhere else, but the
-   *    `onReload` subscription stays live, so a logout ran the whole restart
-   *    against a widget still rendering a blank `<View />`: a remount key
-   *    bump and a fresh watchdog on a WebView nobody renders, and an
-   *    `{type:'error', code:'handshake_timeout'}` handed to the host ~16s
-   *    later for a surface the user had closed and that could never come
-   *    back. Either the restart is real or it should not run; an inline
-   *    widget is still in the host's tree, and a logout is a different user,
-   *    so making it real is the answer consistent with everything above. */
+   *  Two callers, deliberately the same function: the error screen's Retry
+   *  button, and `runtime.onReload` (i.e. `Mentiora.logout()`). Each line
+   *  matters to the logout path in particular:
+   *  - `setErrorCode(null)`: otherwise logging out while the error surface is
+   *    up leaves "something went wrong" covering a healthy, freshly rotated
+   *    page until the user happens to press Retry.
+   *  - the three counters: otherwise the post-logout page inherits the previous
+   *    user's spent budget and can go straight back to the error surface on its
+   *    first hiccup. (A successful `initialize` resets all three anyway, so
+   *    this only matters for a post-logout page that itself struggles.)
+   *  - `setDismissed(false)`: Retry cannot reach this line while dismissed, and
+   *    `dismissed` is cleared nowhere else while the `onReload` subscription
+   *    stays live, so leaving it set runs the whole restart against a widget
+   *    rendering a blank `<View />` — a fresh watchdog on a WebView nobody
+   *    renders, and a `handshake_timeout` to the host ~16s later for a surface
+   *    the user had closed. */
   const restartLoad = (): void => {
     networkFailures.current = 0;
     crashFailures.current = 0;
@@ -832,35 +723,33 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   restart.current = restartLoad;
 
   /** The only exit from a screen the user reached because the page never drew
-   *  its own close control — it must work even when the peer, the runtime and
+   *  its own close control, so it must work when the peer, the runtime and
    *  every ladder above have already given up. Plain component state and the
    *  host's own `onEvent`, nothing else; `dismissed` is checked before
    *  `errorCode` in the render below, so this wins over anything a stray
    *  in-flight timer does afterwards. */
   const onDismiss = (): void => {
     setDismissed(true);
-    // The one `onEvent` call that must not be able to take the exit down
-    // with it: `setDismissed` above has already committed to stop rendering
-    // the WebView regardless of what the host's own callback does next.
+    // The one `onEvent` call that must not be able to take the exit down with
+    // it: `setDismissed` above has already committed to stop rendering the
+    // WebView whatever the host's callback does next.
     try {
       latest.current.props.onEvent?.({ type: 'close' });
     } catch {
-      // Nothing to do with a throwing host callback here — Dismiss has
-      // already done its one job.
+      // Dismiss has already done its one job.
     }
   };
 
-  // -- 11c: insets and Android back ------------------------------------
+  // -- Insets and Android back -----------------------------------------
 
   // Computed once — `StatusBar.currentHeight` and the optional peer do not
   // change for the life of the app — and re-sent on every load boundary
-  // (mount, and every `onLoadEnd`, which fires for every reload too), since
-  // a fresh document has no CSS custom properties of its own until we set
-  // them again. `null` (nothing measurable, e.g. iOS with no peer) is itself
-  // a valid, memoized answer, so a separate guard ref tracks "computed yet",
-  // never `!hostInsets.current` alone — that would recompute (and re-attempt
-  // the `require`) on every render for exactly the hosts where it matters
-  // least to get wrong.
+  // (mount, and every `onLoadEnd`, which fires for every reload too), since a
+  // fresh document has no CSS custom properties of its own until we set them
+  // again. `null` (nothing measurable, e.g. iOS with no peer) is itself a
+  // valid, memoized answer, so a separate guard ref tracks "computed yet";
+  // `!hostInsets.current` alone would recompute, and re-attempt the `require`,
+  // on every render.
   const hostInsetsComputed = useRef(false);
   const hostInsets = useRef<HostInsets | null>(null);
   if (!hostInsetsComputed.current) {
@@ -869,76 +758,55 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   }
 
   // Reads only refs (`webview`, `hostInsets`), so `[]` is genuinely
-  // exhaustive, not a suppressed warning — this keeps one stable identity
-  // across renders, which is what lets the mount effect below run exactly
-  // once instead of on every render.
+  // exhaustive rather than a suppressed warning. That keeps one stable identity
+  // across renders, which is what lets the mount effect below run exactly once
+  // instead of on every render.
   const injectHostInsets = useCallback((): void => {
     const insets = hostInsets.current;
     if (insets) webview.current?.injectJavaScript(hostInsetsScript(insets));
   }, []);
 
-  // Mount-time injection is its own effect (not folded into `onLoadEnd`
-  // below) because the very first load's `onLoadEnd` has not fired yet when
-  // a test — or a slow real page — first inspects what we sent; `webview`
-  // is only attached once this runs, an effect being the one hook that runs
-  // after commit.
+  // Its own effect, not folded into `onLoadEnd` below, because the very first
+  // load's `onLoadEnd` has not fired when a test — or a slow real page — first
+  // inspects what we sent, and `webview` is only attached once an effect runs,
+  // that being the one hook that runs after commit.
   useEffect(() => {
     injectHostInsets();
   }, [injectHostInsets]);
 
-  /** design.md: "Either path dismisses only when the page has released the
-   *  button ... While the page holds it, `mentiora/back` goes to the page."
-   *  Default (nothing ever claimed, or already released): unhandled — the
-   *  host's own back/navigation handling dismisses the widget, since the
-   *  page draws no close control of its own to fall back on here.
+  /** While the page holds the button, `mentiora/back` goes to the page;
+   *  otherwise the press is unhandled and the host's own back handling
+   *  dismisses the widget, there being no close control of ours to fall back
+   *  on.
    *
-   *  `backHeld.current` alone is not trusted: it is set from a page message
-   *  and never told about a reload/remount that resets the session key out
-   *  from under it (11b's ladders do this on their own timetable, not
-   *  ours). `peer.sessionKey() !== null`, re-checked at PRESS TIME (not a
-   *  boolean read once), is what actually proves a hold is still live:
-   *  `resetLoad()` (11b's `advanceGeneration`) clears it synchronously on
-   *  every reload/remount, so the moment that has happened, back reverts to
-   *  unhandled on the very next press even if `backHeld` itself is still
-   *  stuck `true` — no proof-of-life round trip needed, because the session
-   *  key IS the proof. `sendBack()` is otherwise the one host-initiated
-   *  send with no such proof (every other send here is a reply); this is
-   *  what makes it safe: we only ever call it, and only ever claim the
-   *  press as handled, once a session exists in the CURRENT generation.
+   *  `backHeld.current` alone is not trusted: it is set from a page message and
+   *  never told about a reload/remount that resets the session key out from
+   *  under it. `peer.sessionKey() !== null`, re-checked at PRESS TIME, is what
+   *  proves a hold is still live — `advanceGeneration`'s `resetLoad()` clears
+   *  it synchronously on every reload/remount, so back reverts to unhandled on
+   *  the next press even if `backHeld` is stuck `true`. `sendBack()` is the one
+   *  host-initiated send with no reply to prove a session exists; the key is
+   *  that proof.
    *
    *  `dismissed` and `errorCode !== null` are checked FIRST and independently
-   *  of the session key, because the session key is NOT proof that the
-   *  error surface isn't showing. It is tempting to think it is — 11b resets
-   *  every ladder's counter/timer on a successful `initialize`, so the
-   *  network and crash ladders can only reach their cap on a generation that
-   *  never had a live session — but the handshake watchdog's own give-up
-   *  branch (`armWatchdog`'s `else { showError('handshake_timeout') }`) is
-   *  the exception: it calls `showError` directly, with NO `advanceGeneration`
-   *  of its own, so `peer`'s `initializeLatch` and session key are untouched.
-   *  A slow page — a cold start past two 8s watchdog cycles is not exotic —
-   *  can still complete `initialize` and get a live session key AFTER that
-   *  error surface is already up, since the WebView deliberately stays
-   *  mounted underneath it for exactly this reason (so Retry has something
-   *  to retry). If that late page then claims the button, a session-key-only
-   *  check would forward every later back press to a page hidden behind
-   *  `importantForAccessibility="no-hide-descendants"` — handled, but
-   *  invisible, with nothing left to ever release it (the watchdog's
-   *  re-arm no-ops: `handled.current` is still `true` for this generation).
-   *  That is the exact trap this screen exists to prevent, reached through
-   *  the one path that does not reset the session key. `dismissed` covers
-   *  the same gap once Retry/Dismiss are pressed: Dismiss stops rendering
-   *  the WebView but does not touch `backHeld` or the peer, so without this
-   *  check a page that claimed the button before a late handshake would
-   *  leave the BackHandler subscription (still live; only the WebView is
-   *  unmounted) intercepting every press behind a blank `<View />`.
+   *  of the session key, because the key is no proof that the error surface is
+   *  down: the watchdog's give-up branch calls `showError` with no
+   *  `advanceGeneration`, so a slow page can still complete `initialize` and
+   *  get a live session key after that surface is up — the WebView stays
+   *  mounted underneath it so Retry has something to retry. A session-key-only
+   *  check would then forward every press to a page hidden behind
+   *  `importantForAccessibility="no-hide-descendants"`: handled, invisible, and
+   *  with nothing left to release it, the watchdog's re-arm being a no-op while
+   *  `handled.current` is `true`. `dismissed` covers the same gap after
+   *  Dismiss, which stops rendering the WebView but touches neither `backHeld`
+   *  nor the peer, leaving the BackHandler subscription live behind a blank
+   *  `<View />`.
    *
-   *  `dismissed` is redundant AS OF C1 and kept deliberately: the only way
-   *  `errorCode` goes back to null is `restartLoad`, which now runs
-   *  `advanceGeneration` and so clears `backHeld` and the session key — so no
-   *  reachable state has `dismissed` true, `errorCode` null and a live hold
-   *  at once, and no non-vacuous test can distinguish the two checks. It
-   *  stays because it is one token wide and it is what keeps the pair safe if
-   *  a later change clears the surface without crossing a load boundary. */
+   *  `dismissed` is currently redundant — the only way `errorCode` returns to
+   *  null is `restartLoad`, which crosses a load boundary and so clears
+   *  `backHeld` and the session key — and kept because it is one token wide and
+   *  keeps the pair safe if a later change clears the surface without crossing
+   *  a boundary. */
   const onHardwareBack = useCallback((): boolean => {
     if (dismissed || errorCode !== null) return false;
     if (backHeld.current && peer.sessionKey() !== null) {
@@ -948,27 +816,27 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     return false;
   }, [peer, dismissed, errorCode]);
 
-  // `useLayoutEffect`, not `useEffect` (re-review, F10). `onHardwareBack` closes
-  // over `dismissed`/`errorCode`, and `showError` runs from a timer — a
-  // non-discrete lane whose passive effects flush on the scheduler's NEXT task.
-  // A press landing in that gap ran the previous closure and, if the page still
-  // held the button, forwarded `mentiora/back` to a page sitting under the error
+  // `useLayoutEffect`, not `useEffect`. `onHardwareBack` closes over
+  // `dismissed`/`errorCode`, and `showError` runs from a timer — a non-discrete
+  // lane whose passive effects flush on the scheduler's NEXT task. A press
+  // landing in that gap runs the previous closure and, if the page still holds
+  // the button, forwards `mentiora/back` to a page sitting under the error
   // surface instead of closing. A layout effect registers in the same commit as
   // the state that changed it, so the gap does not exist.
   useLayoutEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
-    // Task 12 (fix round 3): the SAME decision, handed to the Modal's
-    // `onRequestClose` too, when one is an ancestor — never a second,
-    // re-derived one. Registering/deregistering here (not a separate effect)
-    // means a fresh `onHardwareBack` closure (`dismissed`/`errorCode` changed)
-    // replaces the old registration atomically, and unmount always clears it.
+    // The SAME decision, handed to the Modal's `onRequestClose` too when one is
+    // an ancestor, never a second re-derived one. Registering and deregistering
+    // here rather than in a separate effect means a fresh `onHardwareBack`
+    // closure (`dismissed`/`errorCode` changed) replaces the old registration
+    // atomically, and unmount always clears it.
     registerBackPress?.(onHardwareBack);
-    // `.remove()` on the subscription BackHandler.addEventListener returns —
-    // never `BackHandler.removeEventListener`, deleted in RN 0.77, which
-    // throws if called. Re-subscribing when `dismissed`/`errorCode` change
-    // (both flow into `onHardwareBack`'s identity via its own deps) is fine:
-    // `.remove()` on the way out always pairs with the `addEventListener`
-    // that produced it.
+    // `.remove()` on the subscription `BackHandler.addEventListener` returns —
+    // never `BackHandler.removeEventListener`, deleted in RN 0.77, which throws
+    // if called. Re-subscribing when `dismissed`/`errorCode` change (both flow
+    // into `onHardwareBack`'s identity via its own deps) is fine: `.remove()`
+    // on the way out always pairs with the `addEventListener` that produced
+    // it.
     return () => {
       subscription.remove();
       registerBackPress?.(null);
@@ -978,45 +846,43 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   const onMessage = useCallback(
     (event: MessageEvent) => {
       const raw = event.nativeEvent.data;
-      // BEFORE the JSON-RPC parser, always: the random reply is not JSON-RPC and
-      // would be answered `-32600` by the peer.
+      // BEFORE the JSON-RPC parser, always: the random reply is not JSON-RPC
+      // and would be answered `-32600` by the peer.
       if (randomSource.acceptReply(raw)) return;
       void peer.receive(raw);
     },
     [peer, randomSource],
   );
 
-  // Not `useCallback`: it calls `beginFreshLoad`, which is rebuilt every
-  // render anyway (it closes over refs, not state, so identity doesn't matter
-  // — same reasoning as `onError`/`onRenderProcessGone` below).
+  // Not `useCallback`: it calls `beginFreshLoad`, which is rebuilt every render
+  // anyway, and both close over refs rather than state, so identity does not
+  // matter — as for `onError`/`onRenderProcessGone` above.
   const onShouldStartLoadWithRequest = (request: NavigationRequest): boolean => {
     const { url, isTopFrame, navigationType } = request;
     if (isSameOrigin(url, latest.current.props.widgetOrigin)) {
       // A load boundary is an identifiable one: initial mount (a freshly built
       // peer already IS generation 0 with no session key) and an allowed
-      // TOP-FRAME navigation. Never a bare `onLoadStart` — Android raises that
-      // from `doUpdateVisitedHistory`, which also sees in-page history changes,
-      // so resetting there clears the session key mid-document and every later
-      // message takes `-32001`. A sub-frame — the custom-block sandbox iframe —
-      // is the same document and must not reset anything either (§2.2). A
-      // top-frame nav is a fresh top-level load exactly like mount, so it
-      // gets its own fresh handshake watchdog too (11b).
+      // TOP-FRAME navigation, which is a fresh top-level load exactly like
+      // mount and so gets its own handshake watchdog. Never a bare
+      // `onLoadStart` — Android raises that from `doUpdateVisitedHistory`,
+      // which also sees in-page history changes, so resetting there clears the
+      // session key mid-document and every later message takes `-32001`. A
+      // sub-frame (the custom-block sandbox iframe) is the same document and
+      // must not reset anything either.
       //
       // Unless the document did not actually change: `/chat` -> `/chat#thread`
       // raises this callback with `isTopFrame: true` on both platforms, and
       // treating a fragment jump as a boundary drops a live session key and
       // reopens the keyless `initialize` latch while the page and its iframe
-      // are still running — every later page call then takes -32001 and the
-      // watchdog reloads a healthy page (external review, M1). The FIRST
-      // top-frame request has nothing to compare against and is always a
-      // boundary, exactly as before.
+      // are still running. The FIRST top-frame request has nothing to compare
+      // against and is always a boundary.
       //
-      // A `reload` is a boundary whatever the URLs say (re-review, F1): iOS
-      // surfaces `navigationType: 'reload'` for `location.reload()` and for the
+      // A `reload` is a boundary whatever the URLs say: iOS surfaces
+      // `navigationType: 'reload'` for `location.reload()` and for the
       // library's own `reload()`, and the URL is identical by definition, so
       // the comparison below cannot see it. Android reports `'other'` for
-      // everything and never raises this callback for a reload at all, so this
-      // is a no-op there.
+      // everything and never raises this callback for a reload at all, so the
+      // check is a no-op there.
       if (isTopFrame) {
         const previous = lastTopUrl.current;
         lastTopUrl.current = url;
@@ -1040,16 +906,16 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   );
 
   // Dismiss is the only one of the two that actually stops rendering the
-  // WebView (11b resolution 4) — checked first so it wins over anything else,
-  // including an error surface a stray in-flight timer sets afterwards.
+  // WebView — checked first so it wins over anything else, including an error
+  // surface a stray in-flight timer sets afterwards.
   if (dismissed) return <View />;
 
   return (
     <View style={styles.container}>
       <WebView<object>
         // Android's own docs are explicit that a dead renderer must be removed
-        // from the hierarchy and destroyed, never reused — `onRenderProcessGone`'s
-        // recovery bumps this key to force exactly that (design.md §2.5).
+        // from the hierarchy and destroyed, never reused; `onRenderProcessGone`'s
+        // recovery bumps this key to force exactly that.
         key={remountKey}
         ref={webview}
         testID="mentiora-webview"
@@ -1062,17 +928,17 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         // in place re-renders with a new `source.uri`, and Android never
         // dispatches `onShouldStartLoadWithRequest` for the resulting
         // `setSource` -> `loadUrl()` (`RNCWebViewClient.java` raises it only
-        // from `shouldOverrideUrlLoading`), so no load boundary is crossed
-        // there: the new document's `initialize` takes -32600 and the widget is
-        // blank until the `onLoadEnd`-armed watchdog reloads it 8s later. It
-        // self-heals, and the effect that would close the gap needs a device
-        // check first, so this is documented rather than coded around.
+        // from `shouldOverrideUrlLoading`), so no load boundary is crossed: the
+        // new document's `initialize` takes `-32600` and the widget is blank
+        // until the `onLoadEnd`-armed watchdog reloads it 8s later. Documented
+        // rather than coded around, since it self-heals and closing the gap
+        // needs a device check first.
         source={{ uri: `${props.widgetOrigin}/h/rn/${encodeURIComponent(props.embedKey)}` }}
         onMessage={onMessage}
         originWhitelist={ALL_ORIGINS}
         onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
-        // Its absence is CVE-2020-6506: without it a target=_blank load silently
-        // replaces the top frame instead of raising `onOpenWindow` (§2.6).
+        // Its absence is CVE-2020-6506: without it a target=_blank load
+        // silently replaces the top frame instead of raising `onOpenWindow`.
         setSupportMultipleWindows={true}
         onOpenWindow={onOpenWindow}
         webviewDebuggingEnabled={__DEV__}
@@ -1081,23 +947,23 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         onRenderProcessGone={onRenderProcessGone}
         onLoadEnd={(event) => {
           onLoadEnd(event);
-          // A fresh document (this reload's own) has none of the previous
-          // one's custom properties — re-set them every time a load
-          // actually finishes, not just once at mount (11c).
+          // A fresh document has none of the previous one's custom properties
+          // — re-set them every time a load actually finishes, not just once
+          // at mount.
           injectHostInsets();
         }}
-        // The overlay below covers this WebView but does not remove it from
-        // the tree (see its own comment), so without this a screen reader
-        // can still reach the dead page underneath the one screen that is
-        // supposed to be the only way out. Android: hide the whole subtree
-        // from TalkBack while the overlay owns the screen.
+        // The overlay below covers this WebView without removing it from the
+        // tree, so without this a screen reader can still reach the dead page
+        // underneath the one screen that is supposed to be the only way out.
+        // Android: hide the whole subtree from TalkBack while the overlay owns
+        // the screen.
         importantForAccessibility={errorCode !== null ? 'no-hide-descendants' : 'auto'}
       />
-      {/* An overlay, not a swap: the WebView stays mounted underneath (its
+      {/* An overlay, not a swap: the WebView stays mounted underneath, so its
        *  `injectJavaScript`/`reload` stay live for whichever ladder is still
-       *  ticking) until Retry or Dismiss actually acts. Retry's own reload is
-       *  what makes the page try again — this screen is just what covers a
-       *  page that, on its own, never draws anything at all (§2.9). */}
+       *  ticking, until Retry or Dismiss actually acts. Retry's own reload is
+       *  what makes the page try again; this screen only covers a page that, on
+       *  its own, never draws anything at all. */}
       {errorCode !== null && (
         // iOS: tells VoiceOver everything outside this view is not part of
         // the current screen, matching Android's `importantForAccessibility`

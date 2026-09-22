@@ -2,18 +2,16 @@
 // asserts every one of them resolves from a consumer's own install.
 //
 // `require.resolve()` / `import.meta.resolve()` on the package entry prove only
-// that the entry file exists: neither evaluates it, and neither walks its
-// imports (external review, M4). Evaluating it is not an option either — an RN
-// entry pulls in Flow-typed `react-native` source that bare node cannot parse.
-// Reading the import graph is what is left, and it is what actually catches a
-// runtime import missing from `peerDependencies`, or an eager import of an
-// optional peer that a consumer is allowed not to install.
+// that the entry file exists: neither evaluates it, neither walks its imports.
+// Evaluating it is not an option either — an RN entry pulls in Flow-typed
+// `react-native` source that bare node cannot parse. Reading the import graph is
+// what catches a runtime import missing from `peerDependencies`, or an eager
+// import of an optional peer a consumer is allowed not to install.
 //
-// ESM build only, deliberately: `import`/`export … from` are statements, so
-// everything this finds runs at load time. A lazily `require()`d optional peer
-// (async-storage in storage.ts, safe-area-context in MentioraWidget.tsx) is
-// guarded by a try/catch by design and is correctly NOT flagged — while the
-// same import written as a top-level `import` in either build would be.
+// ESM build only: `import`/`export … from` are statements, so everything found
+// here runs at load time. A lazily `require()`d optional peer (async-storage in
+// storage.ts, safe-area-context in MentioraWidget.tsx) is try/catch-guarded by
+// design and correctly not flagged; the same import written top-level would be.
 
 import { readFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';

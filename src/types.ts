@@ -32,11 +32,10 @@ export type MentioraErrorCode = 'load_failed' | 'handshake_timeout' | 'renderer_
  * explicitly because this build cannot auto-resolve a peer at all
  * (`no-require`), or look at the store you passed (`load-threw`).
  *
- * Deliberately narrower than `storage.ts`'s internal `StorageReason`, which
- * also has `'override'` and `'peer-loaded'`: those two mean storage WORKS, so
- * they can never accompany a `storageUnavailable` event. Carrying them on the
- * public union would hand every consumer two switch arms that are dead by
- * construction, forever.
+ * Narrower than `storage.ts`'s internal `StorageReason`, whose extra
+ * `'override'` and `'peer-loaded'` mean storage works and so can never
+ * accompany a `storageUnavailable` event. Carrying them here would hand every
+ * consumer two switch arms that are dead by construction.
  */
 export type StorageUnavailableReason = 'peer-absent' | 'no-require' | 'load-threw';
 
@@ -47,12 +46,12 @@ export type MentioraEvent =
   | { type: 'openUrl'; url: string }
   | { type: 'error'; code: MentioraErrorCode }
   /**
-   * design.md §2.4: no AsyncStorage and no `storage` override means the
-   * install id lives in memory, so every launch creates a new anonymous user
-   * with no thread continuity. The `__DEV__` warning that goes out alongside
-   * this is stripped from release bundles, where the failure otherwise shows
-   * up only as inflated anonymous user counts — hence an event too. Emitted
-   * once per embed key, not once per presentation.
+   * No AsyncStorage and no `storage` override means the install id lives in
+   * memory, so every launch creates a new anonymous user with no thread
+   * continuity. The `__DEV__` warning alongside this is stripped from release
+   * bundles, where the failure otherwise shows up only as inflated anonymous
+   * user counts — hence an event as well. Emitted once per embed key, not
+   * once per presentation.
    */
   | { type: 'storageUnavailable'; reason: StorageUnavailableReason };
 

@@ -1,9 +1,8 @@
 /**
  * The install id is the SDK's anonymous user identity: on first launch with
- * no signed-in user, the widget's server mints an anonymous user keyed to
- * it, and every thread that user creates hangs off it. Scoped per
- * `embedKey` so an app embedding two different widgets never has them
- * share one anonymous user (design.md §2.4).
+ * no signed-in user, the widget's server mints an anonymous user keyed to it,
+ * and every thread that user creates hangs off it. Scoped per `embedKey`, so
+ * an app embedding two widgets never has them share one anonymous user.
  */
 
 import { toBase64Url } from './random.js';
@@ -24,9 +23,9 @@ export const loadOrCreateInstallId = async (deps: {
   return id;
 };
 
-/** Deletes the install id. It does not mint a new one — the next
- *  `loadOrCreateInstallId` call does that, keeping logout's two effects
- *  (rotate now, mint on next use) separable. */
+/** Deletes the install id without minting a new one; the next
+ *  `loadOrCreateInstallId` does that, keeping logout's two effects — rotate
+ *  now, mint on next use — separable. */
 export const rotateInstallId = async (deps: {
   storage: MentioraStorage;
   embedKey: string;

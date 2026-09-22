@@ -1,9 +1,6 @@
-// src/__tests__/presenter.test.tsx
-//
-// Task 12: `Mentiora.open()/close()/logout()` presenting `<MentioraWidget />`
-// over a `Modal`. `react-native`'s `Modal` is NOT mocked (unlike WebView), so
-// `onRequestClose` is read straight off the rendered element rather than
-// fired as a DOM-style event.
+// `Mentiora.open()/close()/logout()` presenting `<MentioraWidget />` over a `Modal`.
+// `react-native`'s `Modal` is not mocked, unlike WebView, so `onRequestClose` is read
+// off the rendered element rather than fired as a DOM-style event.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { StrictMode, Suspense, useEffect } from 'react';
@@ -28,13 +25,10 @@ beforeEach(() => {
   Mentiora.close();
 });
 
-// Fake timers for the WHOLE file, not toggled per test: `driveCrashLadderToExhaustion`
-// needs to advance past the widget's own mount-armed watchdog and recovery
-// timers, and Jest's fake timers only intercept a `setTimeout` call made
-// AFTER `jest.useFakeTimers()` runs — switching mid-test, after a widget has
-// already mounted under real timers, leaves that specific timer unreachable
-// by `advanceTimersByTimeAsync`. 11b's file makes the same file-wide choice
-// for the same reason.
+// Fake timers for the whole file, not toggled per test. Jest's fake timers only
+// intercept a `setTimeout` made after `jest.useFakeTimers()` runs, so switching
+// mid-test — after a widget has mounted under real timers — leaves that widget's
+// watchdog and recovery timers unreachable by `advanceTimersByTimeAsync`.
 beforeEach(() => {
   jest.useFakeTimers();
 });
@@ -44,11 +38,6 @@ afterEach(() => {
 });
 
 // -- helpers ------------------------------------------------------------
-//
-// `handshake`/`backHandling` copy 11c's shape; `handshakeInstallId` extends
-// 11a's `sent()` pattern to pull `installId` out of the initialize reply;
-// `driveCrashLadderToExhaustion` copies 11b's `advance()` pattern and its own
-// "Retry recovers a dead renderer" test's loop shape.
 const BRIDGE_INJECTION = /^window\.mentioraHost\.receive\((.*)\);true;$/s;
 
 const sentFrom = (view: MockWebViewRef = __lastWebView()): Record<string, unknown>[] =>
@@ -84,8 +73,8 @@ const handshakeInstallId = async (el: ReturnType<typeof screen.getByTestId>): Pr
 };
 
 // Every send once a session exists carries `params.sessionKey` (peer.ts's
-// `withSessionParams`) — pull it off the last message sent so far, on
-// whichever WebView is currently `__lastWebView()` unless told otherwise.
+// `withSessionParams`), read off the last message sent on whichever WebView is
+// currently `__lastWebView()` unless told otherwise.
 const currentSessionKey = (view?: MockWebViewRef): string => {
   const last = sentFrom(view).at(-1) as { params?: { sessionKey?: string } } | undefined;
   const key = last?.params?.sessionKey;
@@ -100,15 +89,14 @@ const backHandling = (active: boolean, view?: MockWebViewRef): string =>
     params: { sessionKey: currentSessionKey(view), active },
   });
 
-// `Modal` (unlike `react-native-webview`) is NOT mocked, and this project's
-// RNTL has no `UNSAFE_getByType`: `Modal` renders straight down to the native
-// `RCTModalHostView`, which carries `onRequestClose` as one of its own host
-// props (`Modal.js`). Read it off that host node rather than firing a
-// DOM-style event `fireEvent` has no mapping for.
-// `screen.container`, not `screen.root` (which is only `container.children[0]`
-// — the FIRST top-level sibling): several tests here render the Modal's host
-// alongside an inline `<MentioraWidget />` sibling, and `root` would silently
-// search only the sibling that happens to render first.
+// `Modal` is not mocked and this project's RNTL has no `UNSAFE_getByType`. `Modal`
+// renders down to the native `RCTModalHostView`, which carries `onRequestClose` as
+// one of its own host props (`Modal.js`), so read it off that node rather than firing
+// a DOM-style event `fireEvent` has no mapping for.
+//
+// `screen.container`, not `screen.root`: `root` is only `container.children[0]`, the
+// first top-level sibling, and several tests here render the Modal's host alongside
+// an inline `<MentioraWidget />`.
 const modalHosts = () =>
   screen.container.queryAll((node) => typeof node.props.onRequestClose === 'function', {
     includeSelf: true,
@@ -121,11 +109,9 @@ const requestClose = (): void => {
 };
 
 // Drives `CRASH_RETRY_POLICY.attempts` (4) `onRenderProcessGone` failures to
-// exhaustion, the same way 11b's own "Retry recovers a dead renderer" test
-// does — re-querying `mentiora-webview` by testID on every iteration rather
-// than caching the element, because `onRenderProcessGone`'s recovery bumps
-// `remountKey` and swaps the WebView instance out from under a cached
-// reference on every attempt but the last.
+// exhaustion. Re-queries `mentiora-webview` by testID on every iteration rather than
+// caching the element, because the recovery bumps `remountKey` and swaps the WebView
+// instance out from under a cached reference on every attempt but the last.
 const driveCrashLadderToExhaustion = async (): Promise<void> => {
   for (let i = 0; i < 4; i++) {
     await fireEvent(screen.getByTestId('mentiora-webview'), 'renderProcessGone', {
@@ -137,10 +123,9 @@ const driveCrashLadderToExhaustion = async (): Promise<void> => {
   }
 };
 
-// Fix round 3, Major 5: mimics an open-on-launch deep link / push-notification
-// handoff — a screen that calls `Mentiora.open()` from its own mount effect,
-// with no control over where `<MentioraHost />` sits relative to it in the
-// tree.
+// An open-on-launch deep link or push-notification handoff: a screen calling
+// `Mentiora.open()` from its own mount effect, with no control over where
+// `<MentioraHost />` sits relative to it in the tree.
 function OpenOnMount({ onError }: { onError: (error: unknown) => void }): null {
   useEffect(() => {
     Mentiora.open().catch(onError);
@@ -148,10 +133,9 @@ function OpenOnMount({ onError }: { onError: (error: unknown) => void }): null {
   return null;
 }
 
-// Fix round 3, Minor: two hosts with stable identity (`key`) across a
-// rerender, so removing one specific host (not "whichever ends up at index
-// 0") is actually reachable in a test — plain positional children would have
-// React reuse index 0 regardless of which logical host that was.
+// Two hosts with stable identity (`key`) across a rerender, so removing one specific
+// host is reachable: with plain positional children React reuses index 0 regardless
+// of which logical host that was.
 function TwoHosts({ showFirst }: { showFirst: boolean }): React.JSX.Element {
   return (
     <>
@@ -176,10 +160,9 @@ test('open presents a Modal and close dismisses it', async () => {
 });
 
 test('open works with no widget mounted anywhere — that is the whole point', async () => {
-  // design.md:117-121 shows configure() + open() standing alone, and :414's example app
-  // puts the button on a different screen from the embedded tab. (A <MentioraHost />
-  // still has to be mounted somewhere — fix round 1 replaced the AppRegistry-wrapper
-  // approach that made even that automatic — but no INLINE <MentioraWidget /> is needed.)
+  // configure() + open() stand alone: the button may live on a different screen from
+  // any embedded tab. A <MentioraHost /> still has to be mounted somewhere, but no
+  // inline <MentioraWidget /> is needed.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -193,19 +176,18 @@ test('open before configure throws a clear error naming the missing call', async
 });
 
 test('open throws a distinct error naming MentioraHost when configured but no host is mounted', async () => {
-  // A customer who configured but forgot to mount the host learns THAT, not
-  // "call configure()" again — a customer who did neither gets the configure
-  // message instead (checked above), since that's the more fundamental gap.
+  // A customer who configured but forgot to mount the host learns that, rather than
+  // being told to call configure() again. One who did neither gets the configure
+  // message, checked above, since that is the more fundamental gap.
   Mentiora.configure(cfg);
   await expect(Mentiora.open()).rejects.toThrow(/MentioraHost/);
 });
 
 test('two mounted hosts never render two Modals — the oldest-mounted one owns it', async () => {
-  // Only one is ever expected in practice (one `<MentioraHost />`, once, at
-  // the app root) — this is the "briefly two during a screen transition"
-  // case, and the rule is a total order (oldest-mounted wins) rather than
-  // "last wins" or "undefined", so it never shows two Modals, even for one
-  // frame.
+  // One `<MentioraHost />` at the app root is the expected shape; two exist only
+  // briefly during a screen transition. The rule is a total order — oldest-mounted
+  // wins — rather than "last wins" or "undefined", so two Modals never show, not even
+  // for one frame.
   Mentiora.configure(cfg);
   await render(
     <>
@@ -220,10 +202,9 @@ test('two mounted hosts never render two Modals — the oldest-mounted one owns 
 });
 
 test('after the active host unmounts, a surviving host takes over the Modal', async () => {
-  // Fix round 3, Minor (mutation-verified — see the report): `activeHostId`
-  // must be re-assigned to a SURVIVING host on the active one's unmount, not
-  // dropped to `null` — the latter fails silently (`open()` still succeeds,
-  // since a host IS still mounted, but nothing ever renders).
+  // `activeHostId` is re-assigned to a surviving host when the active one unmounts,
+  // never dropped to `null`: dropping it fails silently, since `open()` still
+  // succeeds with a host mounted but nothing ever renders.
   Mentiora.configure(cfg);
   const view = await render(<TwoHosts showFirst={true} />);
   await act(async () => {
@@ -237,11 +218,10 @@ test('after the active host unmounts, a surviving host takes over the Modal', as
 });
 
 test('open() succeeds when the host mounts after its caller, in the same commit', async () => {
-  // Fix round 3, Major 5: `useSyncExternalStore` subscribes in a passive
-  // effect, which runs in tree order — a host rendered AFTER the screen that
-  // calls `open()` from ITS OWN mount effect has not subscribed yet when
-  // that effect runs. `open()`'s host check counts from RENDER now, not
-  // subscribe, so this must succeed regardless of sibling order.
+  // `useSyncExternalStore` subscribes in a passive effect, which runs in tree order,
+  // so a host rendered after the screen calling `open()` from its own mount effect
+  // has not subscribed yet. `open()`'s host check counts from render rather than
+  // subscribe, so it must succeed regardless of sibling order.
   Mentiora.configure(cfg);
   const errors: unknown[] = [];
   await render(
@@ -257,15 +237,12 @@ test('open() succeeds when the host mounts after its caller, in the same commit'
 });
 
 test('open() succeeds with the host under StrictMode (the RN/Expo template default)', async () => {
-  // Fix round 4, Critical 2. StrictMode mounts effects, tears them down and
-  // mounts them again on the SAME fiber, without re-rendering. Counting
-  // `hostIds` membership at render only (fix round 3's answer to Major 5,
-  // above) meant the push ran once and the subscribe cleanup's splice ran
-  // twice, so the host was deregistered permanently and `open()` threw
-  // "needs <MentioraHost /> mounted" at an app whose host IS mounted — in
-  // every new RN/Expo app, since their templates wrap the root in StrictMode.
-  // The other order (the host-before-caller sibling case that used to live
-  // here) is covered by the test above: it catches nothing this pair doesn't.
+  // StrictMode mounts effects, tears them down and mounts them again on the same
+  // fiber without re-rendering. Counting `hostIds` membership at render alone means
+  // the push runs once and the subscribe cleanup's splice runs twice, deregistering
+  // the host permanently: `open()` then throws "needs <MentioraHost /> mounted" at an
+  // app whose host is mounted — every new RN/Expo app, whose templates wrap the root
+  // in StrictMode.
   Mentiora.configure(cfg);
   await render(
     <StrictMode>
@@ -279,10 +256,9 @@ test('open() succeeds with the host under StrictMode (the RN/Expo template defau
 });
 
 test('close before configure is a no-op, not a throw', () => {
-  // Deliberately asymmetric with `logout()` (below), which now throws in the
-  // equivalent case: there is nothing to undo here, so a mutation that made
-  // this throw too — "unifying" the two guards — would be wrong, not merely
-  // redundant. This guards specifically against that unification.
+  // Deliberately asymmetric with `logout()` below, which throws in the equivalent
+  // case: there is nothing to undo here, so unifying the two guards would be wrong
+  // rather than merely redundant.
   expect(() => {
     Mentiora.close();
   }).not.toThrow();
@@ -306,16 +282,14 @@ test('reopening remounts the WebView — the reload is intended, not a bug', asy
 });
 
 test('logout before configure throws, naming the missing call', async () => {
-  // Fix round 3, Major 6: silently resolving here would strand the PREVIOUS
-  // user's install id and `wasSignedIn` flag in storage, undiagnosable.
+  // Silently resolving here strands the previous user's install id and `wasSignedIn`
+  // flag in storage, with nothing to diagnose it by.
   await expect(Mentiora.logout()).rejects.toThrow(/configure/);
 });
 
 test('logout with the Modal closed and no inline widget still rotates the install id', async () => {
-  // Rewritten (fix round 3): the original version only asserted the promise
-  // resolved, which is also true of a `logout()` that does nothing at all —
-  // asserting the actual, real-runtime side effect is what makes this
-  // non-vacuous.
+  // Asserts the real-runtime side effect: a `logout()` that does nothing at all also
+  // resolves its promise.
   Mentiora.configure(cfg);
   const bytesOf =
     (fill: number) =>
@@ -348,21 +322,19 @@ test('after a closed-state logout the next open initializes with the rotated ins
 });
 
 test('logout reloads an inline widget onto a page that can handshake, under a new session key', async () => {
-  // Fix round 3, Major 8: design.md §2.4's "logout() ... reloads whichever
-  // widgets are mounted" applies to an INLINE widget too, not only the one
-  // inside the Modal — `MentioraWidget` subscribes to `runtime.onReload`
-  // itself. The original test here registered its OWN listener on the runtime
-  // and could not have caught a widget that never subscribed at all.
+  // `logout()` reloads whichever widgets are mounted, including an inline one and not
+  // only the Modal's: `MentioraWidget` subscribes to `runtime.onReload` itself, so a
+  // test registering its own runtime listener cannot catch a widget that never
+  // subscribed.
   //
-  // Fix round 4, Critical 1: the version after that one asserted only that the
-  // WebView INSTANCE changed, which is the mechanism, not the outcome — and
-  // that gap is exactly how a remount with no load boundary shipped. Without
-  // `beginFreshLoad()` (so without `peer.resetLoad()`) the remounted page is
-  // dead: its `initialize` is answered `-32600 "initialize already completed
-  // for this page load"`, that rejection is STAMPED with the pre-logout
-  // session key, and the peer goes on authorizing that key for the next
-  // user's page. Assert the outcome instead: the fresh page completes a
-  // handshake, and nothing sent to it carries the previous session's key.
+  // Asserting only that the WebView instance changed tests the mechanism, not the
+  // outcome, and that gap is how a remount with no load boundary gets through.
+  // Without `beginFreshLoad()`, and so without `peer.resetLoad()`, the remounted page
+  // is dead: its `initialize` is answered `-32600 "initialize already completed for
+  // this page load"`, that rejection is stamped with the pre-logout session key, and
+  // the peer goes on authorizing that key for the next user's page. The outcome is
+  // what is asserted: the fresh page handshakes, and nothing sent to it carries the
+  // previous session's key.
   Mentiora.configure(cfg);
   await render(<MentioraWidget {...cfg} />);
   const before = __lastWebView();
@@ -375,8 +347,8 @@ test('logout reloads an inline widget onto a page that can handshake, under a ne
 
   const after = __lastWebView();
   expect(after).not.toBe(before); // remounted, not reloaded in place
-  // Throws ("no installId in the handshake reply") if the page got `-32600`
-  // instead of a result — i.e. if the remount skipped the load boundary.
+  // Throws ("no installId in the handshake reply") if the page got `-32600` instead
+  // of a result, which is what a remount skipping the load boundary produces.
   expect(await handshakeInstallId(screen.getByTestId('mentiora-webview'))).toEqual(
     expect.any(String),
   );
@@ -386,12 +358,10 @@ test('logout reloads an inline widget onto a page that can handshake, under a ne
 });
 
 test('logout clears a stale error surface instead of leaving it over the fresh page', async () => {
-  // Fix round 5: the reload handler did `beginFreshLoad()` + `setRemountKey`
-  // and stopped there, while Retry — the same event, a user-initiated fresh
-  // start — also cleared `errorCode` and every ladder counter. So logging out
-  // from the error screen left "something went wrong" covering a healthy,
-  // freshly rotated page, with Retry as the only apparent way forward on a
-  // page that was already fine. Both paths now run the SAME `restartLoad`.
+  // Logout and Retry both run the same `restartLoad`. A reload handler that does
+  // `beginFreshLoad()` + `setRemountKey` and stops, while Retry also clears
+  // `errorCode` and every ladder counter, leaves a logout from the error screen with
+  // "something went wrong" covering a healthy, freshly rotated page.
   Mentiora.configure(cfg);
   await render(<MentioraWidget {...cfg} />);
   await driveCrashLadderToExhaustion();
@@ -460,12 +430,10 @@ test('onRequestClose dismisses only once the page released the back button', asy
 });
 
 test('onRequestClose dismisses even while the page holds back, once the error surface is up', async () => {
-  // Establish a session first, so the page can actually claim the button
-  // (a handler only exists once `onHardwareBack` has something live to
-  // check), then drive the CRASH ladder — the WebView stays mounted under
-  // the error surface (`importantForAccessibility`, never an unmount), so
-  // the registration from before the crash is still the one `onRequestClose`
-  // reads under the error surface.
+  // A session first, so the page can claim the button, then the crash ladder. The
+  // WebView stays mounted under the error surface — marked
+  // `importantForAccessibility`, never unmounted — so the registration from before
+  // the crash is still the one `onRequestClose` reads.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -481,11 +449,10 @@ test('onRequestClose dismisses even while the page holds back, once the error su
   await act(async () => {
     requestClose();
   });
-  // `includeHiddenElements` matters here specifically: the WebView is marked
-  // `importantForAccessibility="no-hide-descendants"` under the error
-  // surface, which RNTL's queries exclude BY DEFAULT — a plain
-  // `queryByTestId` would read as `null` (looks dismissed) even while still
-  // mounted, hiding exactly the bug this test exists to catch.
+  // `includeHiddenElements` because the WebView under the error surface is marked
+  // `importantForAccessibility="no-hide-descendants"`, which RNTL's queries exclude
+  // by default: a plain `queryByTestId` reads `null` — looking dismissed — while it
+  // is still mounted.
   expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
   expect(
     sentFrom(view)
@@ -494,14 +461,13 @@ test('onRequestClose dismisses even while the page holds back, once the error su
   ).toBe(false);
 });
 
-test('a transient reload does not leave the Modal back button dead (Critical 1)', async () => {
-  // `onHardwareBack` re-checks `peer.sessionKey() !== null` at PRESS TIME,
-  // not a stale flag — a single transient load failure resets the session
-  // key (`advanceGeneration` -> `peer.resetLoad()`) WITHOUT ever showing the
-  // error surface (`LOAD_RETRY_POLICY.attempts` = 3, so one failure just
-  // schedules a reload). Before fix round 3, `onRequestClose` asked "is
-  // there an entry in the map?" and got a stale yes, calling a `sendBack()`
-  // that silently no-ops once the session is gone and never dismissing.
+test('a transient reload does not leave the Modal back button dead', async () => {
+  // `onHardwareBack` re-checks `peer.sessionKey() !== null` at press time rather
+  // than reading a stale flag. A single transient load failure resets the session key
+  // (`advanceGeneration` -> `peer.resetLoad()`) without ever showing the error
+  // surface, since `LOAD_RETRY_POLICY.attempts` is 3 and one failure just schedules a
+  // reload. Asking "is there an entry in the map?" instead gets a stale yes and calls
+  // a `sendBack()` that no-ops once the session is gone, never dismissing.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -514,9 +480,9 @@ test('a transient reload does not leave the Modal back button dead (Critical 1)'
   await act(async () => {
     await jest.advanceTimersByTimeAsync(2000); // past the ~1s first retry delay
   });
-  // Captured before `requestClose()`: dismissing unmounts the WebView, and
-  // `sent()`/`__lastWebView()` throw once none is mounted — this ref object
-  // itself, and its call history, are still good afterward.
+  // Captured before `requestClose()`: dismissing unmounts the WebView and
+  // `sent()`/`__lastWebView()` throw once none is mounted, while this ref object and
+  // its call history stay good.
   const view = __lastWebView();
   const sentBeforeClose = sentFrom(view).length;
   await act(async () => {
@@ -530,11 +496,10 @@ test('a transient reload does not leave the Modal back button dead (Critical 1)'
   ).toBe(false);
 });
 
-test('an inline widget on the same embed key does not hijack the Modal back channel (Critical 2)', async () => {
-  // design.md §3.1's own example app: a header button opening the Modal and
-  // a tab embedding <MentioraWidget /> directly, both on the SAME embed key.
-  // Before fix round 3, the back channel was keyed by embedKey, so whichever
-  // widget last claimed the button under that key answered for BOTH.
+test('an inline widget on the same embed key does not hijack the Modal back channel', async () => {
+  // A header button opening the Modal and a tab embedding <MentioraWidget /> on the
+  // same embed key. Keying the back channel by embedKey lets whichever widget last
+  // claimed the button under that key answer for both.
   Mentiora.configure(cfg);
   await render(
     <>
@@ -558,10 +523,9 @@ test('an inline widget on the same embed key does not hijack the Modal back chan
     requestClose();
   });
 
-  // Fixed: keyed per WIDGET INSTANCE (a context), never by embedKey, so the
-  // inline widget's registration is never even consulted here — the Modal
-  // dismisses on its own widget's (unclaimed) back state, and the inline
-  // widget's page is never sent anything.
+  // Keyed per widget instance, through a context, so the inline widget's
+  // registration is never consulted: the Modal dismisses on its own widget's
+  // unclaimed back state and the inline widget's page is sent nothing.
   expect(screen.getAllByTestId('mentiora-webview')).toHaveLength(1); // only the inline one left
   expect(
     sentFrom(inlineView)
@@ -570,13 +534,11 @@ test('an inline widget on the same embed key does not hijack the Modal back chan
   ).toBe(false);
 });
 
-test('after Retry recovers from an error, the Modal honours a fresh back hold again (Major 4)', async () => {
-  // Fix round 3, Major 4: a `blocked`-style one-way latch never cleared when
-  // Retry clears `errorCode` would leave EVERY future back press dismissing
-  // the Modal for the rest of its life, even after a fresh, healthy session.
-  // `onHardwareBack`'s OWN `errorCode !== null` check is read live, so it
-  // re-enables itself the moment Retry clears the surface — there is no
-  // separate latch left to go stale.
+test('after Retry recovers from an error, the Modal honours a fresh back hold again', async () => {
+  // `onHardwareBack`'s `errorCode !== null` check is read live, so it re-enables
+  // itself the moment Retry clears the surface. A `blocked`-style one-way latch that
+  // Retry does not clear leaves every future back press dismissing the Modal for the
+  // rest of its life, even on a fresh, healthy session.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -596,21 +558,18 @@ test('after Retry recovers from an error, the Modal honours a fresh back hold ag
   expect(screen.getByTestId('mentiora-webview')).toBeTruthy(); // still open
 });
 
-test('a host onEvent that throws on close still lets the presenter close the Modal (Major 7)', async () => {
-  // Fix round 3, Major 7: the wrapper used to call the host's `onEvent`
-  // BEFORE its own bookkeeping. `MentioraWidget`'s Dismiss path
-  // (`onDismiss`) wraps ITS OWN `onEvent` call in try/catch — "the one call
-  // that must not be able to take the exit down with it" — which then also
-  // swallowed the presenter's `Mentiora.close()` as collateral when it ran
-  // AFTER the (throwing) host callback, stranding a `visible={true}` Modal
-  // over the blank `<View />` Dismiss had just rendered, with no escape on
-  // iOS (`onRequestClose` never fires there).
+test('a host onEvent that throws on close still lets the presenter close the Modal', async () => {
+  // The wrapper does its own bookkeeping before calling the host's `onEvent`.
+  // `MentioraWidget`'s Dismiss path wraps its own `onEvent` call in try/catch, so a
+  // `Mentiora.close()` running after a throwing host callback is swallowed as
+  // collateral, stranding a `visible={true}` Modal over the blank `<View />` Dismiss
+  // just rendered, with no escape on iOS, where `onRequestClose` never fires.
   const throwingConfig = {
     ...cfg,
     onEvent: (event: { type: string }): void => {
-      // Only `close` throws — `error` (fired first, driving the ladder to
-      // exhaustion below) must not, or the throw would happen there instead
-      // of at the point this test actually means to exercise.
+      // Only `close` throws. `error` fires first, driving the ladder to exhaustion
+      // below, and a throw there would land somewhere other than the point under
+      // test.
       if (event.type === 'close') throw new Error('boom');
     },
   };
@@ -624,32 +583,24 @@ test('a host onEvent that throws on close still lets the presenter close the Mod
     await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss }));
   });
   expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
-  // The assertion that makes this test real (branch review, M4). The line
-  // above passes under the bug too: `MentioraWidget`'s Dismiss path calls
-  // `setDismissed(true)` and renders `<View />` BEFORE it calls `onEvent`, so
-  // the WebView is gone whether or not `Mentiora.close()` ever ran. The MODAL
-  // is what gets stranded — `visible={true}` over the blank view, with no
-  // escape on iOS — so the Modal is what has to be asserted gone. Fails with
-  // `Received array: [<Modal onRequestClose={...} visible={true}>...]` under
-  // the single-line mutation that swaps `Mentiora.close()` back after
-  // `config.onEvent?.(event)` in `presenter.tsx`'s `ModalBody`.
+  // The line above passes even when `Mentiora.close()` never ran: `MentioraWidget`'s
+  // Dismiss path calls `setDismissed(true)` and renders `<View />` before calling
+  // `onEvent`, so the WebView is gone either way. The Modal is what gets stranded, so
+  // the Modal is what has to be asserted gone. Fails with
+  // `Received array: [<Modal onRequestClose={...} visible={true}>...]` when
+  // `Mentiora.close()` runs after `config.onEvent?.(event)` in `ModalBody`.
   expect(modalHosts()).toHaveLength(0);
 });
 
-// Branch review, M3. The phantom-id leak `hostIds` documents as "benign"
-// is not: a `<MentioraHost />` that renders and never commits leaves an id
-// that nothing ever splices out, sitting at index 0 because it was pushed
-// first. The teardown then hands ownership to `hostIds[0]` — the phantom —
-// the first time a real host unmounts, and every surviving host renders
-// `null` for the rest of the process. `open()` resolves and nothing appears.
+// A `<MentioraHost />` that renders and never commits leaves an id in `hostIds` that
+// nothing splices out, sitting at index 0 because it was pushed first. A teardown
+// handing ownership to `hostIds[0]` rather than `subscribedIds[0]` therefore hands it
+// to the phantom the first time a real host unmounts, and every surviving host
+// renders `null` for the rest of the process: `open()` resolves and nothing appears.
 //
-// `<Suspense>` in an app root is ordinary (`React.lazy`, React Navigation's
-// lazy screens, a `use()`d promise), and so is a discarded render from an
-// interrupted transition.
-//
-// Catches the single-line change of `subscribedIds[0]` back to `hostIds[0]`
-// in `registerHost`'s teardown: host "b" then renders nothing and the final
-// query finds zero WebViews.
+// `<Suspense>` in an app root is ordinary — `React.lazy`, React Navigation's lazy
+// screens, a `use()`d promise — and so is a discarded render from an interrupted
+// transition.
 function Suspends({ gate }: { gate: Promise<void> }): null {
   throw gate;
 }
@@ -660,8 +611,8 @@ test('a host render that never commits can never end up owning the Modal', async
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  // The phantom: this `<MentioraHost />` renders (pushing its id) and is then
-  // discarded along with the rest of the boundary when its sibling suspends.
+  // The phantom: this `<MentioraHost />` renders, pushing its id, and is discarded
+  // with the rest of the boundary when its sibling suspends.
   const view = await render(
     <Suspense fallback={null}>
       <MentioraHost />
@@ -684,16 +635,11 @@ test('a host render that never commits can never end up owning the Modal', async
   });
 });
 
-// Re-review, N5. `dismissed` is never cleared, but the `runtime.onReload`
-// subscription stays live through it — so `Mentiora.logout()` ran the whole
-// fresh-start path against a widget rendering a blank `<View />`: a remount
-// key bump and a fresh watchdog on a WebView nobody renders, and a
-// `handshake_timeout` handed to the host ~16s later for a surface the user
-// closed and that could never come back. That contradicts `restartLoad`'s own
-// argument that a logout IS a complete fresh start.
-//
-// Catches deleting `setDismissed(false)` from `restartLoad`: the WebView never
-// comes back, so the query below throws.
+// A dismissed widget keeps its `runtime.onReload` subscription, so `restartLoad`
+// clears `dismissed` too. Without `setDismissed(false)` there, `Mentiora.logout()`
+// runs the whole fresh-start path against a widget rendering a blank `<View />`: a
+// remount key bump and a fresh watchdog on a WebView nobody renders, and a
+// `handshake_timeout` handed to the host ~16s later for a surface the user closed.
 test('logout revives a dismissed inline widget rather than restarting a blank one', async () => {
   Mentiora.configure(cfg);
   const onEvent = jest.fn();
@@ -708,31 +654,25 @@ test('logout revives a dismissed inline widget rather than restarting a blank on
     await Mentiora.logout();
   });
 
-  // The fresh start is real: a page again, and one that can actually speak.
+  // The fresh start is real: a page again, and one that can speak.
   expect(await handshakeInstallId(screen.getByTestId('mentiora-webview'))).toEqual(
     expect.any(String),
   );
-  // And no error event for a surface that was never on screen. Two watchdog
-  // cycles' worth of time, which is what the spurious one took to arrive.
+  // And no error event for a surface that was never on screen, over two watchdog
+  // cycles' worth of time — long enough for the spurious one to arrive.
   await act(async () => {
     await jest.advanceTimersByTimeAsync(20000);
   });
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
-// --- Re-review, F9 ---
-//
-// `hostIds` was pushed to from the RENDER BODY, so a host that rendered and was
-// thrown away (a `<Suspense>` sibling suspending, an interrupted transition,
-// React 18's StrictMode double render) left its id there forever. That was
-// documented as benign — `open()` succeeds and nothing renders — but `open()`
-// also sets `visible: true` and nothing clears it, so the next host to actually
-// COMMIT popped the Modal with no `open()` call behind it. Counting from the
-// LAYOUT phase instead keeps the same-commit and StrictMode cases above green
-// (every layout effect in a commit runs before any passive effect) while only
-// committed renders ever count.
-//
-// Catches moving the `hostIds` push back into `MentioraHost`'s render body.
+// `hostIds` is pushed to from the layout phase, not the render body. From the render
+// body, a host that renders and is thrown away — a `<Suspense>` sibling suspending,
+// an interrupted transition, StrictMode's double render — leaves its id there
+// forever, and since `open()` sets `visible: true` with nothing clearing it, the next
+// host to actually commit pops a Modal with no `open()` behind it. The layout phase
+// keeps the same-commit and StrictMode cases above green, because every layout effect
+// in a commit runs before any passive effect, while only committed renders count.
 test('a host render that never commits neither satisfies open() nor pops a Modal', async () => {
   Mentiora.configure(cfg);
   const gate = new Promise<void>(() => {}); // never settles: the boundary stays in fallback
@@ -747,7 +687,7 @@ test('a host render that never commits neither satisfies open() nor pops a Modal
     await expect(Mentiora.open()).rejects.toThrow(/MentioraHost/);
   });
 
-  // And the host that does commit later must not inherit a `visible` nobody set.
+  // And a host that commits later must not inherit a `visible` nobody set.
   await view.rerender(<MentioraHost />);
   expect(screen.queryByTestId('mentiora-webview')).toBeNull();
 });

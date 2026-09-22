@@ -89,13 +89,10 @@ test('two resolutions do not share one in-memory store', async () => {
   );
 });
 
-// --- External review, m1 ---
-//
-// Every throw out of the peer `require` used to be tagged `peer-absent`, and
-// that reason is what the public `storageUnavailable` event carries: an
-// async-storage that failed to initialise, or that was missing a transitive
-// dependency of its own, told the customer to install a package they already
-// have.
+// The reason below is what the public `storageUnavailable` event carries. Tagging
+// every throw out of the peer `require` as `peer-absent` tells a customer whose
+// async-storage failed to initialise, or is missing a transitive dependency of its
+// own, to install a package they already have.
 const moduleNotFound = (message: string): Error =>
   Object.assign(new Error(message), { code: 'MODULE_NOT_FOUND' });
 
@@ -119,8 +116,8 @@ test('a MODULE_NOT_FOUND naming something ELSE is load-threw, not peer-absent', 
     defaultLoad(
       () => true,
       () => {
-        // Node's real shape for a transitive miss: the stack names the peer
-        // that IS installed, one line below the module that is not (F11).
+        // Node's real shape for a transitive miss: the stack names the peer that
+        // is installed, one line below the module that is not.
         throw moduleNotFound(
           "Cannot find module 'some-transitive-dep'\nRequire stack:\n" +
             '- /app/node_modules/@react-native-async-storage/async-storage/lib/index.js\n' +

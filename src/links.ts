@@ -67,19 +67,19 @@ export const originOf = (url: string): string | null => {
  *  `/chat` -> `/chat#thread` is not a load boundary: the document and its
  *  sandbox iframe are still alive, so treating it as one drops a valid session
  *  key and reopens the keyless `initialize` latch, after which every page call
- *  takes -32001 and the watchdog reloads a healthy page (external review, M1;
- *  design.md:184-190 warns about the same class for Android's `onLoadStart`).
+ *  takes -32001 and the watchdog reloads a healthy page.
  *
- *  The TARGET must actually carry a fragment (re-review, F1). The HTML navigate
- *  algorithm is fragment-only iff the destination's fragment is non-null and the
- *  two URLs are otherwise equal, so `/chat` -> `/chat` (a reload, or a link back
- *  to the current path) and `/chat#t` -> `/chat` (fragment removal) are BOTH full
+ *  The TARGET must actually carry a fragment. The HTML navigate algorithm is
+ *  fragment-only iff the destination's fragment is non-null and the two URLs
+ *  are otherwise equal, so `/chat` -> `/chat` (a reload, or a link back to the
+ *  current path) and `/chat#t` -> `/chat` (fragment removal) are both full
  *  document navigations. Reading either as "same document" leaves the new
- *  document's `initialize` answered -32600 and the widget blank for 8s until the
- *  watchdog reloads it. `#` alone counts: an empty fragment is still non-null.
+ *  document's `initialize` answered -32600 and the widget blank for 8s until
+ *  the watchdog reloads it. `#` alone counts: an empty fragment is still
+ *  non-null.
  *
  *  Raw string comparison, deliberately: `clean()` would let two genuinely
- *  different URLs compare equal, and here an over-eager "same document" is the
+ *  different URLs compare equal, and an over-eager "same document" is the
  *  dangerous direction. */
 export const isSameDocument = (a: string, b: string): boolean =>
   b.includes('#') && a.split('#')[0] === b.split('#')[0];

@@ -50,9 +50,8 @@ test('an over-long url is denied rather than parsed', () => {
 });
 
 test('isSameOrigin accepts a long, legitimately same-origin url -- no length bound here', () => {
-  // Resolution #5: the 2048 bound belongs to isAllowedExternal only. A long
-  // same-origin url is the widget's own navigation and must not be denied by someone
-  // later applying that bound file-wide.
+  // The 2048 bound belongs to isAllowedExternal only. A long same-origin url is the
+  // widget's own navigation, and applying that bound file-wide would deny it.
   const origin = 'https://widget.acme.mentiora.ai';
   assert.equal(isSameOrigin(`${origin}/h/rn/k?state=${'a'.repeat(3000)}`, origin), true);
 });
@@ -98,8 +97,6 @@ test('originOf itself rejects a userinfo or backslash authority, not only throug
   assert.equal(originOf('https://widget.acme.mentiora.ai\\.evil.com/'), null);
 });
 
-// --- Adversarial cases beyond the brief ---
-
 test('a trailing dot on the host is a different origin (denied, not matched)', () => {
   assert.equal(
     isSameOrigin('https://widget.acme.mentiora.ai./x', 'https://widget.acme.mentiora.ai'),
@@ -125,10 +122,9 @@ test('a URL-encoded @ or backslash does not decode into the raw separator', () =
 });
 
 test('a null byte inside "javascript:" recombines under clean(), denied by the allow-list', () => {
-  // clean() strips every C0 control anywhere in the string (it's a global replace,
-  // not just a trim), so the embedded NUL disappears and 'java' + 'script:' fuse back
-  // into 'javascript:' -- same mechanism as the brief's tab/newline case. It is denied
-  // here by the allow-list, not by the NUL surviving to break the scheme match.
+  // clean() is a global replace, not a trim, so the embedded NUL disappears and
+  // 'java' + 'script:' fuse back into 'javascript:'. What denies it is the
+  // allow-list, not the NUL surviving to break the scheme match.
   assert.equal(schemeOf('java\u0000script:alert(1)'), 'javascript:');
   assert.equal(isAllowedExternal('java\u0000script:alert(1)'), false);
 });
@@ -179,9 +175,8 @@ test('single-slash and triple-slash forms are not treated as authority-bearing',
   );
 });
 
-// External review, M1: a fragment jump is the same document, and treating it
-// as a load boundary drops a live session key (MentioraWidget's
-// `onShouldStartLoadWithRequest`).
+// A fragment jump is the same document. Treating it as a load boundary in
+// MentioraWidget's `onShouldStartLoadWithRequest` drops a live session key.
 test('isSameDocument ignores the fragment and nothing else', () => {
   const base = 'https://w.x.ai/h/rn/k';
   assert.equal(isSameDocument(base, `${base}#thread-2`), true);
@@ -192,9 +187,9 @@ test('isSameDocument ignores the fragment and nothing else', () => {
   assert.equal(isSameDocument(base, 'https://w.x.ai/h/rn/other'), false);
 });
 
-// Re-review, F1. Both of these used to report "same document", so a genuinely
-// new document could not initialize for 8s. Per the HTML navigate algorithm a
-// navigation is fragment-only only when the TARGET carries a fragment.
+// Per the HTML navigate algorithm a navigation is fragment-only when the TARGET
+// carries a fragment. Reporting either of these as "same document" leaves a
+// genuinely new document unable to initialize for 8s.
 test('a same-URL reload and a fragment removal are both new documents', () => {
   const base = 'https://w.x.ai/h/rn/k';
   assert.equal(isSameDocument(base, base), false, 'location.reload() is a full navigation');

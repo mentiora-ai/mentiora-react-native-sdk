@@ -1,6 +1,5 @@
-// The release guard is the only non-trivial logic in the scaffold: it is what
-// stops a mismatched tag from publishing. Node's own test runner, so the check
-// needs no test framework installed.
+// The release guard stops a mismatched tag from publishing. Written against
+// Node's own test runner, so it needs no test framework installed.
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -46,11 +45,10 @@ test('rejects a prerelease flag that disagrees with the version', () => {
   );
 });
 
-// This test used to assert that the CURRENT CHANGELOG contains the CURRENT
-// heading, and never ran the guard at all: deleting the changelog check from
-// assert-version.mjs left it green (external review, M6). The guard resolves
-// everything it reads from its own location, so a throwaway tree with a copy of
-// it is enough to exercise the real code path.
+// Asserting that the current CHANGELOG contains the current heading never runs
+// the guard, so deleting the changelog check from assert-version.mjs stays green.
+// The guard resolves everything it reads from its own location, so a throwaway
+// tree holding a copy of it exercises the real code path.
 const guardTree = (changelog) => {
   const root = mkdtempSync(join(tmpdir(), 'release-guard-'));
   mkdirSync(join(root, 'scripts'), { recursive: true });

@@ -1,32 +1,30 @@
 /**
- * Random bytes sourced from the page's WebCrypto, bounded at 2s (design.md
- * §2.1). React Native has no global WebCrypto and `Math.random` is not a
- * CSPRNG, so the host injects a script that calls `crypto.getRandomValues`
- * inside the WebView and posts the bytes back. Those bytes become the
- * bridge session key (16 bytes) and, on first launch, the install id
- * (16 more).
+ * Random bytes sourced from the page's WebCrypto, bounded at 2s. React Native
+ * has no global WebCrypto and `Math.random` is not a CSPRNG, so the host
+ * injects a script that calls `crypto.getRandomValues` inside the WebView and
+ * posts the bytes back. Those bytes become the bridge session key (16 bytes)
+ * and, on first launch, the install id (16 more).
  *
  * `globalCrypto` is an injectable seam for a host app that has polyfilled
- * WebCrypto (or for tests) — it is not a production path in React Native,
- * which has no global `crypto`. When present, it skips the round trip
- * entirely.
+ * WebCrypto, and for tests; React Native has no global `crypto`, so it is not
+ * a production path. When present it skips the round trip.
  *
- * One request in flight at a time: `bytes()` is only ever called during the
+ * One request in flight at a time: `bytes()` is only called during the
  * handshake, so a second call while one is pending rejects rather than
- * queuing — there is no general request/response correlator here.
+ * queuing — there is no request/response correlator here.
  *
  * A reply is authenticated by a PER-REQUEST NONCE, never by the tag alone.
  * The tag is a module constant, so anything that can reach
  * `window.ReactNativeWebView.postMessage` — including the page's sandboxed
- * custom-block iframe, which is exactly who the session key defends the host
- * against (design.md:172) — could otherwise spell it, hand back 16 chosen
- * bytes and pick the session key and the install id. The nonce goes out
- * inside the injected script, which runs in the MAIN frame only, and comes
- * back in the reply; a sub-frame never sees either, so it cannot spell one.
- * Unguessable rather than merely unique: `Math.random` is not a CSPRNG, but
- * this generator lives in the React Native JS realm, whose stream nothing on
- * the page side can observe or seed — and if we had a CSPRNG here there would
- * be no round trip to protect. The counter only guarantees non-repetition.
+ * custom-block iframe, which is who the session key defends the host against
+ * — could otherwise spell it, hand back 16 chosen bytes and so pick the
+ * session key and the install id. The nonce goes out inside the injected
+ * script, which runs in the main frame only, and comes back in the reply; a
+ * sub-frame sees neither and cannot spell one. Unguessable rather than merely
+ * unique: `Math.random` is not a CSPRNG, but this generator lives in the React
+ * Native JS realm, whose stream nothing on the page side can observe or seed —
+ * and a CSPRNG here would remove the round trip it protects. The counter only
+ * guarantees non-repetition.
  */
 
 export type RandomSource = {
@@ -35,14 +33,12 @@ export type RandomSource = {
   bytes: (count: number) => Promise<Uint8Array>;
   /** Called by the component's onMessage router BEFORE the JSON-RPC parser. */
   acceptReply: (raw: string) => boolean;
-  /** A load boundary invalidates the parked resolver, if any (design.md §2.2:
-   *  "A reset invalidates every in-flight `receive` AND every parked
-   *  random-bytes resolver"). The request belongs to a document that no
-   *  longer exists and its reply can never arrive, but `pending` would stay
-   *  non-null for the rest of its 2 s timeout — and the replacement page's
-   *  `initialize` hits "already in flight" on its very first line and is
-   *  answered `-32603`, poisoning the one handshake that was supposed to be
-   *  the recovery (branch review, C3). */
+  /** Invalidates the parked resolver, if any, at a load boundary. The request
+   *  belongs to a document that no longer exists and its reply can never
+   *  arrive, but `pending` would otherwise stay non-null for the rest of its
+   *  2 s timeout — and the replacement page's `initialize` then hits "already
+   *  in flight" on its first line and is answered `-32603`, poisoning the one
+   *  handshake meant to be the recovery. */
   reset: () => void;
 };
 
@@ -131,12 +127,11 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
 
     const current = pending;
     // The nonce is the whole authentication: no pending request, or a nonce
-    // that is not THIS request's, means the message is not ours. Fall through
-    // to the JSON-RPC parser (which drops it, id-less) rather than consuming
-    // it — and, above all, never resolve, reject or free the pending request
-    // on a stranger's say-so. A stale reply from a document that a load
-    // boundary already superseded lands here too, and must not answer the
-    // replacement page's request.
+    // that is not THIS request's, means the message is not ours, so fall
+    // through to the JSON-RPC parser rather than resolving, rejecting or
+    // freeing the pending request on a stranger's say-so. A stale reply from a
+    // superseded document lands here too and must not answer the replacement
+    // page's request.
     if (!current || obj.nonce !== current.nonce) return false;
 
     pending = null;

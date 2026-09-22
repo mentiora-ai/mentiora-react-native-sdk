@@ -72,8 +72,6 @@ test('toBase64Url emits no +, / or = padding', () => {
   assert.ok(!/[+/=]/.test(s));
 });
 
-// --- Fix round 1 ---
-
 test('a reply with the wrong number of bytes rejects instead of resolving short', async () => {
   let script = '';
   const src = createRandomSource({
@@ -128,10 +126,9 @@ test('a throwing globalCrypto rejects instead of throwing synchronously', async 
   await assert.rejects(src.bytes(16), /broken polyfill/);
 });
 
-// design.md §2.2: "A reset invalidates every in-flight `receive` AND every
-// parked random-bytes resolver." The second half had no implementation at all
-// (branch review, C3): a request parked by a document that has since been
-// replaced holds the single-in-flight slot for its full 2 s timeout, and the
+// A reset must invalidate every parked random-bytes resolver, not only every
+// in-flight `receive`. A request parked by a document that has since been replaced
+// otherwise holds the single-in-flight slot for its full 2s timeout, and the
 // replacement page's `initialize` is rejected on its first line.
 test('reset frees the single-in-flight slot for the replacement page', async () => {
   let cleared = 0;
@@ -150,8 +147,8 @@ test('reset frees the single-in-flight slot for the replacement page', async () 
   await assert.rejects(parked, /superseded/);
   assert.equal(cleared, 1, "the dead request's 2s timer must not outlive it");
 
-  // The whole point: the NEXT page may ask, rather than taking
-  // "already in flight" and failing its handshake.
+  // The next page may ask, rather than taking "already in flight" and failing
+  // its handshake.
   const fresh = src.bytes(16);
   assert.equal(src.acceptReply(reply(script, { bytes: Array(16).fill(3) })), true);
   assert.equal((await fresh)[0], 3);
@@ -171,14 +168,10 @@ test('reset with nothing parked is a no-op, not a spurious rejection', async () 
   assert.equal((await src.bytes(16))[0], 1);
 });
 
-// --- External review, B1 ---
-//
-// The reply used to be authenticated by `obj.tag` alone, and that tag is a
-// module constant. Anything that can reach `ReactNativeWebView.postMessage`
-// — the page's sandboxed custom-block iframe above all, the one party the
-// session key exists to defend the host against (design.md:172) — could
-// therefore hand back 16 chosen bytes while a request was pending and pick
-// the session key AND the install id.
+// The reply is authenticated by nonce, not by `obj.tag` alone, which is a module
+// constant. Anything that can reach `ReactNativeWebView.postMessage` — the page's
+// sandboxed custom-block iframe above all — could otherwise hand back 16 chosen
+// bytes while a request is pending and pick both the session key and the install id.
 test('a tagged reply with a foreign nonce neither resolves nor consumes the request', async () => {
   let script = '';
   let cleared = 0;
@@ -199,7 +192,7 @@ test('a tagged reply with a foreign nonce neither resolves nor consumes the requ
   assert.equal(forged, false, 'not ours: it must fall through to the JSON-RPC parser');
   assert.equal(cleared, 0, 'the pending request must not have been consumed');
 
-  // No nonce at all is the pre-fix shape, and must fare no better.
+  // A reply with no nonce at all must fare no better.
   assert.equal(
     src.acceptReply(JSON.stringify({ tag: RANDOM_REPLY_TAG, bytes: Array(16).fill(0) })),
     false,
