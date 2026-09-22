@@ -565,6 +565,18 @@ test("the 8s floor survives StrictMode's simulated unmount", async () => {
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
+/** The widget under a switch, so unmounting it is an ordinary re-render of a
+ *  surviving tree rather than tearing the test's own root down. */
+function Mounted({
+  show,
+  onEvent,
+}: {
+  show: boolean;
+  onEvent: jest.Mock;
+}): React.JSX.Element | null {
+  return show ? <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} /> : null;
+}
+
 // The unmount cleanup cleared the timers that existed AT THAT MOMENT but left
 // `generation.current` alone, so an `initialize` still parked on the
 // random-bytes round trip (or on identity, or on an install-id mint) rejected
@@ -580,12 +592,50 @@ test('an initialize rejecting after unmount never reaches the host', async () =>
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
   try {
     const onEvent = jest.fn();
-    const el = await mount(onEvent);
-    await initialize(el);
-    screen.unmount(); // the user closes the chat while the handshake is parked
+    const view = await render(
+      <Mounted show={true} onEvent={onEvent} />, // a screen the user can navigate away from
+    );
+    await initialize(screen.getByTestId('mentiora-webview'));
+    await act(async () => {
+      view.rerender(<Mounted show={false} onEvent={onEvent} />);
+    });
     await advance(22000);
     expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
   } finally {
     Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
+  }
+});
+
+// --- Re-review, F12 ---
+//
+// `peer.ts` answers every handler rejection `-32603 Internal error` (the
+// protocol's, not ours to change), so an install marked `wasSignedIn` booting
+// with no `identity` configured showed a blank widget for ~16s and then a Retry
+// screen that can never succeed — with nothing anywhere naming the cause or the
+// fix, which is to call `Mentiora.logout()`.
+//
+// Catches deleting the `__DEV__` warn from the initialize handler's catch.
+test('a signed-in install with no identity says so in dev, and names logout', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    const store = new Map<string, string>([[`mentiora.wasSignedIn.${KEY}`, '1']]);
+    const storage = {
+      getItem: async (k: string) => store.get(k) ?? null,
+      setItem: async (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: async (k: string) => {
+        store.delete(k);
+      },
+    };
+    const view = await render(
+      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} storage={storage} />,
+    );
+    await initialize(view.getByTestId('mentiora-webview'));
+    await advance(0);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/mentiora identity:.*logout\(\)/s));
+  } finally {
+    warn.mockRestore();
   }
 });

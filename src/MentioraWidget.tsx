@@ -87,6 +87,7 @@ import { WebView } from 'react-native-webview';
 import { BackChannelContext } from './back-channel.js';
 import { BridgeError, createHostPeer, type HostPeer } from './bridge/peer.js';
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
+import { IdentityUnavailable } from './identity.js';
 import { isAllowedExternal, isSameDocument, isSameOrigin } from './links.js';
 import { createRandomSource, type RandomDeps, type RandomSource, toBase64Url } from './random.js';
 import { delaysFor, type RetryPolicy } from './retry.js';
@@ -448,6 +449,22 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
             // a `bytes()` timeout (§2.1) or a storage rejection. Re-arming hands
             // the incident to the watchdog's own one-reload-then-error path,
             // which ends at that screen.
+            //
+            // Name the real cause while the developer can still act on it
+            // (re-review, F12). `peer.ts` answers every handler rejection
+            // `-32603 Internal error` — the protocol's, not ours to change —
+            // and the page turns that into a silent ~16s wait and then a Retry
+            // screen that can never succeed. The one failure that has a fix
+            // the developer must be told about is an install marked
+            // `wasSignedIn` with no identity configured: what they need is
+            // `Mentiora.logout()`, and nothing anywhere said so.
+            if (__DEV__ && e instanceof IdentityUnavailable) {
+              console.warn(
+                `mentiora identity: ${e.message}. The handshake will fail until an ` +
+                  '`identity` is configured for this embed key, or `Mentiora.logout()` ' +
+                  'is called to release the signed-in marker.',
+              );
+            }
             if (generation.current === myGen) armWatchdog();
             throw e;
           }

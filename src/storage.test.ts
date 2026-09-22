@@ -104,7 +104,9 @@ test('a MODULE_NOT_FOUND naming the peer itself is peer-absent', () => {
     defaultLoad(
       () => true,
       () => {
-        throw moduleNotFound("Cannot find module '@react-native-async-storage/async-storage'");
+        throw moduleNotFound(
+          "Cannot find module '@react-native-async-storage/async-storage'\nRequire stack:\n- /app/index.js",
+        );
       },
     ),
   );
@@ -117,7 +119,13 @@ test('a MODULE_NOT_FOUND naming something ELSE is load-threw, not peer-absent', 
     defaultLoad(
       () => true,
       () => {
-        throw moduleNotFound("Cannot find module 'some-transitive-dep'");
+        // Node's real shape for a transitive miss: the stack names the peer
+        // that IS installed, one line below the module that is not (F11).
+        throw moduleNotFound(
+          "Cannot find module 'some-transitive-dep'\nRequire stack:\n" +
+            '- /app/node_modules/@react-native-async-storage/async-storage/lib/index.js\n' +
+            '- /app/node_modules/other/index.js',
+        );
       },
     ),
   );

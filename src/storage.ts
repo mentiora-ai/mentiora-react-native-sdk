@@ -102,7 +102,15 @@ export const defaultLoad = (
     // event carries, so the wrong advice reaches the host app, not just a log.
     const message = err instanceof Error ? err.message : String(err);
     const code = (err as { code?: unknown } | null)?.code;
-    const absent = code === 'MODULE_NOT_FOUND' && message.includes(ASYNC_STORAGE);
+    // The FIRST LINE only (re-review, F11). Node's MODULE_NOT_FOUND message for
+    // a TRANSITIVE miss is `Cannot find module 'x'\nRequire stack:\n- …/@react-
+    // native-async-storage/async-storage/index.js\n- …`, so a whole-message
+    // `includes` matches the peer that IS installed and reports it absent —
+    // exactly the misclassification m1 meant to remove, and `peer-absent` is
+    // what the public `storageUnavailable` event carries, so the wrong advice
+    // reaches the host app and not just a log.
+    const absent =
+      code === 'MODULE_NOT_FOUND' && (message.split('\n')[0] as string).includes(ASYNC_STORAGE);
     throw new StorageLoadFailure(absent ? 'peer-absent' : 'load-threw', message);
   }
 };
