@@ -28,6 +28,9 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - run: bun run typecheck
+      # The root tsconfig excludes `example/`.
+      - run: bun run typecheck:example
+      - run: bun run check:example-mint
       - run: bun run lint
 
       - name: fixtures unmodified
@@ -35,6 +38,9 @@ jobs:
 
       - run: bun run test
       - run: bun run build
+
+      # The only check that resolves the SDK through Metro (example/metro.config.js).
+      - run: bun run bundle:example
 
       - run: bunx publint --strict
       - run: bunx attw --pack .

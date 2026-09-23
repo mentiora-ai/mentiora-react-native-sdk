@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Mentiora Example",
+    "slug": "mentiora-example",
+    "scheme": "mentioraexample",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": ["expo-router"],
+    "ios": {
+      "bundleIdentifier": "ai.mentiora.example.dev",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "ai.mentiora.example.dev",
+      "usesCleartextTraffic": true
+    }
+  }
+}

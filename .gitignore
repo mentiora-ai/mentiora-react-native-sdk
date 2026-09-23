@@ -7,3 +7,9 @@ coverage/
 .specs/
 .superpowers/
 lib-test/
+.expo/
+dist/
+expo-env.d.ts
+.env*.local
+example/ios/
+example/android/

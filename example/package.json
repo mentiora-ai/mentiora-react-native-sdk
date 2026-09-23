@@ -1,0 +1,29 @@
+{
+  "name": "@mentiora/react-native-sdk-example",
+  "version": "0.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "prebuild": "expo prebuild --clean"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "57.0.22",
+    "expo-constants": "57.0.18",
+    "expo-linking": "57.0.10",
+    "expo-router": "57.0.21",
+    "js-sha256": "1.0.0",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "5.7.0",
+    "react-native-screens": "4.26.2",
+    "react-native-webview": "13.16.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "typescript": "6.0.3"
+  }
+}
