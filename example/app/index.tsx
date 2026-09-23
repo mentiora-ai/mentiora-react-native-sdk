@@ -33,7 +33,9 @@ const configure = (identity: typeof identityFetcher | undefined): void => {
     onEvent: (event) => {
       record(event);
       if (event.type === 'ready' || event.type === 'close' || event.type === 'error') {
-        disarmBootDeadline();
+        // `ready` also retires the deadline for good: from here the page is warm, so a
+        // later open has no `ready` to wait for.
+        disarmBootDeadline(event.type === 'ready');
       }
     },
   });
