@@ -31,7 +31,7 @@ export type MentioraEvent =
   | { type: 'openUrl'; url: string }
   | { type: 'error'; code: MentioraErrorCode }
   /** The install id lives in memory, so every launch is a new anonymous user.
-   *  Once per embed key; the paired `__DEV__` warning is release-stripped. */
+   *  Emitted once per embed key. */
   | { type: 'storageUnavailable'; reason: StorageUnavailableReason };
 
 /** Overrides the AsyncStorage default used to persist the install id. */
@@ -42,7 +42,7 @@ export interface MentioraStorage {
 }
 
 export interface MentioraConfig {
-  /** Per tenant, e.g. https://widget.acme.mentiora.ai. No default is safe. */
+  /** Per tenant, e.g. https://widget.acme.mentiora.ai. */
   widgetOrigin: string;
   /** `pk_wgt_…`. The SDK loads `${widgetOrigin}/h/rn/${embedKey}`. */
   embedKey: string;
@@ -56,4 +56,12 @@ export interface MentioraConfig {
   strings?: Partial<MentioraStrings>;
 }
 
-export type MentioraWidgetProps = MentioraConfig;
+export type MentioraWidgetProps = MentioraConfig & {
+  /**
+   * `false` parks the widget: it stays mounted and keeps its page, but stops claiming
+   * the Android back button and is hidden from screen readers. `<MentioraHost />` sets
+   * it to keep the page warm across close/open. Inline hosts can set it for a widget in
+   * a tab that is not on screen; leaving it out means visible.
+   */
+  visible?: boolean;
+};

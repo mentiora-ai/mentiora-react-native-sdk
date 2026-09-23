@@ -98,8 +98,6 @@ test('a handshake timeout never spends the network retry ladder', async () => {
   expect(codes).not.toContain('load_failed');
 });
 
-// A rejected handshake's watchdog is the re-armed, late one. It cannot cover the synchronous
-// `clearWatchdogTimer()` — the catch's `armWatchdog()` clears anyway — so the sibling below does.
 test('a rejected handshake is reloaded by the RE-ARMED watchdog, not the mount-armed one', async () => {
   // Told apart by when they fire: mount-armed at 8s, re-armed at 2s + 8s.
   const realCrypto = globalThis.crypto;
@@ -116,9 +114,8 @@ test('a rejected handshake is reloaded by the RE-ARMED watchdog, not the mount-a
   }
 });
 
-// The only test covering the synchronous `clearWatchdogTimer()`: under Jest `globalThis.crypto`
-// exists, so nothing but the clear stands between a good handshake and the 8s timer. Fails unless
-// it is the handler's first statement — the page is otherwise reloaded, its session key discarded.
+// Only this test covers the synchronous `clearWatchdogTimer()`: Jest has `globalThis.crypto`, so
+// the clear alone stops the 8s timer. Fails unless it is the handler's first statement.
 test('a handshake that succeeds at 7.9s is answered and NOT reloaded at 8s', async () => {
   const onEvent = jest.fn();
   const el = await mount(onEvent);
@@ -128,6 +125,23 @@ test('a handshake that succeeds at 7.9s is answered and NOT reloaded at 8s', asy
 
   // The handshake really landed; without this a rejected `initialize` passes too.
   expect(sent().some((m) => 'result' in m)).toBe(true);
+  expect(__lastWebView().reload).not.toHaveBeenCalled();
+  expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});
+
+test('a handshake that lands BEFORE loadEnd is not reloaded a budget later', async () => {
+  // The page can answer `initialize` before the native load-end event arrives — a cached
+  // bundle, or plain ordering jitter. `onLoadEnd` used to arm unconditionally, starting a
+  // watchdog this document's spent `initialize` can never clear, so a working widget went
+  // blank and reloaded 8s after it was already usable.
+  const onEvent = jest.fn();
+  const el = await mount(onEvent);
+  await initialize(el);
+  expect(sent().some((m) => 'result' in m)).toBe(true);
+
+  await fireEvent(screen.getByTestId('mentiora-webview'), 'loadEnd', { nativeEvent: {} });
+  await advance(9000);
+
   expect(__lastWebView().reload).not.toHaveBeenCalled();
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
@@ -191,8 +205,8 @@ test('the error overlay is modal to a screen reader — both flags flip with err
     await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
     await advance(9000);
   }
-  // A screen reader must not reach the dead page. Read off `el`, not `getByTestId`: RNTL's
-  // default queries exclude `importantForAccessibility="no-hide-descendants"`, the prop under test.
+  // Read off `el`: RNTL's default queries exclude
+  // `importantForAccessibility="no-hide-descendants"`, the prop under test.
   expect(el.props.importantForAccessibility).toBe('no-hide-descendants');
   expect(modalOverlays()).toHaveLength(1);
 });
@@ -298,7 +312,7 @@ test('an initialize handler that rejects ends at the error surface, not a dead w
   // Past the boot ladder's sleeps, then both watchdog cycles: reload, then give up.
   await advance(20000);
 
-  // -32603 proves the handler rejected rather than never being reached.
+  // -32603 shows the handler was reached and rejected.
   expect(sent().some((m) => (m.error as { code?: number } | undefined)?.code === -32603)).toBe(
     true,
   );
@@ -404,7 +418,7 @@ test('a render that never commits leaves no watchdog behind', async () => {
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
-// The other half: StrictMode's double-mount clears a render-armed timer and the guard stops re-arming.
+// StrictMode's double-mount clears a render-armed timer and the guard stops re-arming.
 test("the 8s floor survives StrictMode's simulated unmount", async () => {
   const onEvent = jest.fn();
   await render(
@@ -436,9 +450,7 @@ test('an initialize rejecting after unmount never reaches the host', async () =>
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
   try {
     const onEvent = jest.fn();
-    const view = await render(
-      <Mounted show={true} onEvent={onEvent} />, // a screen the user can navigate away from
-    );
+    const view = await render(<Mounted show={true} onEvent={onEvent} />);
     await initialize(screen.getByTestId('mentiora-webview'));
     await act(async () => {
       view.rerender(<Mounted show={false} onEvent={onEvent} />);

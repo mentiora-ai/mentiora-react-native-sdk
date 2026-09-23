@@ -1,10 +1,8 @@
 /**
- * Host side of the JSON-RPC 2.0 bridge (mobile bridge protocol v1); the page
- * is the client and sends every request. `receive`: `parseInbound` (`-32600`
- * if a string `id` survived, else drop) → `mentiora/initialize`, a request
- * only, params then a one-shot latch, no session-key check → all else must
- * carry `params.sessionKey` (`-32001`; id-less dropped, a deviation) → route
- * `-32601`/`-32602`/`-32603`. Outbound messages carry the key, errors too.
+ * Host side of the JSON-RPC 2.0 bridge (protocol v1); the page sends every
+ * request. `mentiora/initialize` is accepted once per page load without a
+ * session key; every other message must carry `params.sessionKey` (-32001).
+ * Id-less messages that fail are dropped. Every outbound message carries the key.
  */
 
 import {
@@ -35,10 +33,9 @@ export type HostHandlers = {
   onBackHandling: (active: boolean) => void;
 };
 
-/** A handler error naming its own JSON-RPC code, so the composition root can
- *  reach `-32003` (URL denied) and `-32002` (identity unavailable); anything
- *  else becomes `-32603`. `message` reaches the page verbatim, so it must be a
- *  fixed literal — never an upstream error's text, a URL or a token. */
+/** A handler error carrying its JSON-RPC code; other errors become -32603.
+ *  `message` reaches the page verbatim, so it must be a fixed literal and never
+ *  an upstream error's text, a URL or a token. */
 export class BridgeError extends Error {
   readonly code: ErrorCode;
   constructor(code: ErrorCode, message: string) {
@@ -51,12 +48,14 @@ export class BridgeError extends Error {
 export type HostPeer = {
   receive: (raw: string) => Promise<void>;
   sendBack: () => void;
+  /** Tells a warm page it is on screen again; see `Method.show`. */
+  sendShow: () => void;
   resetLoad: () => void;
   sessionKey: () => string | null;
 };
 
-// Best-effort id for a payload that failed `parseInbound`, only to decide
-// whether the failure is answerable. Validated no further than non-empty.
+// Best-effort id for a payload that failed `parseInbound`, to decide whether
+// the failure is answerable.
 const extractRawId = (raw: string): string | undefined => {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -64,9 +63,7 @@ const extractRawId = (raw: string): string | undefined => {
       const id = (parsed as Record<string, unknown>).id;
       if (typeof id === 'string' && id.length > 0) return id;
     }
-  } catch {
-    // not JSON at all
-  }
+  } catch {}
   return undefined;
 };
 
@@ -83,8 +80,8 @@ export const createHostPeer = (deps: {
   const { send, handlers } = deps;
   const warn = deps.warn ?? (() => {});
 
-  // `resetLoad` bumps this; a `receive` whose captured value no longer matches
-  // neither mutates nor sends, or a slow `initialize` answers the next page.
+  // Bumped by `resetLoad`; a `receive` from an older load neither mutates nor
+  // sends, so a slow `initialize` cannot answer the next page.
   let generation = 0;
   let initializeLatch = false;
   let currentSessionKey: string | null = null;
@@ -138,7 +135,7 @@ export const createHostPeer = (deps: {
     }
 
     if (message.method === Method.initialize) {
-      if (!('id' in message)) return; // id-less notification: dropped, latch untouched
+      if (!('id' in message)) return;
 
       const { id } = message;
       if (!isInitializeParams(message.params)) {
@@ -150,12 +147,12 @@ export const createHostPeer = (deps: {
         return;
       }
 
-      initializeLatch = true; // reserved before the handler is awaited, not after
+      initializeLatch = true; // set before the await so a concurrent initialize is rejected
       try {
         const result = await handlers.initialize({
           protocolVersion: message.params.protocolVersion,
         });
-        if (myGen !== generation) return; // superseded load: neither mutate nor send
+        if (myGen !== generation) return;
         currentSessionKey = result.sessionKey;
         sendResult(id, result);
       } catch {
@@ -242,11 +239,24 @@ export const createHostPeer = (deps: {
     );
   };
 
+  // Guarded on the session key like `sendBack`: a page that has not handshaked has no
+  // key to validate the notification against and would answer `-32001`.
+  const sendShow = (): void => {
+    if (currentSessionKey === null) return;
+    send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: Method.show,
+        params: { sessionKey: currentSessionKey },
+      }),
+    );
+  };
+
   const resetLoad = (): void => {
     generation += 1;
     initializeLatch = false;
     currentSessionKey = null;
   };
 
-  return { receive, sendBack, resetLoad, sessionKey: () => currentSessionKey };
+  return { receive, sendBack, sendShow, resetLoad, sessionKey: () => currentSessionKey };
 };

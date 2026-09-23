@@ -1,4 +1,4 @@
-// `Mentiora.open()/close()/logout()` presenting `<MentioraWidget />` over an unmocked `Modal`.
+// `Mentiora.open()/close()/logout()` presenting `<MentioraWidget />` in the warm overlay.
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { StrictMode, Suspense, useEffect } from 'react';
@@ -82,18 +82,23 @@ const backHandling = (active: boolean, view?: MockWebViewRef): string =>
     params: { sessionKey: currentSessionKey(view), active },
   });
 
-// No `UNSAFE_getByType` here, so `onRequestClose` is read off the native
-// `RCTModalHostView` host props. `screen.container`, not `screen.root`: `root` is only
-// `container.children[0]`, and several tests render a sibling `<MentioraWidget />`.
-const modalHosts = () =>
-  screen.container.queryAll((node) => typeof node.props.onRequestClose === 'function', {
-    includeSelf: true,
-  });
+/**
+ * Android back, dispatched as RN dispatches it: newest subscriber first, stopping at the
+ * first handler that returns `true`. There is no `Modal` any more, so this is the whole
+ * path — the overlay subscribes after the widget it contains (React flushes child effects
+ * first), which is what makes the overlay's claim outrank the widget's.
+ */
+/** Parked means mounted and warm but off-screen: inert to touches and to a11y. */
+const overlayParked = (): boolean =>
+  screen.getByTestId('mentiora-overlay', { includeHiddenElements: true }).props.pointerEvents ===
+  'none';
 
-const requestClose = (): void => {
-  const [modal] = modalHosts();
-  if (!modal) throw new Error('no Modal with onRequestClose found — call Mentiora.open() first');
-  (modal.props.onRequestClose as () => void)();
+const pressBack = (): boolean => {
+  const handlers = (globalThis as unknown as { __backHandlers: Array<() => boolean> })
+    .__backHandlers;
+  if (handlers.length === 0) throw new Error('nothing registered for hardwareBackPress');
+  for (const handler of [...handlers].reverse()) if (handler()) return true;
+  return false;
 };
 
 // Drives the crash policy's 4 attempts to exhaustion, re-querying by testID each time:
@@ -127,7 +132,7 @@ function TwoHosts({ showFirst }: { showFirst: boolean }): React.JSX.Element {
   );
 }
 
-test('open presents a Modal and close dismisses it', async () => {
+test('open shows the overlay and close parks it', async () => {
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   expect(screen.queryByTestId('mentiora-webview')).toBeNull();
@@ -142,7 +147,6 @@ test('open presents a Modal and close dismisses it', async () => {
 });
 
 test('open works with no widget mounted anywhere — that is the whole point', async () => {
-  // configure() + open() stand alone: a host must be mounted, an inline widget need not.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -156,13 +160,11 @@ test('open before configure throws a clear error naming the missing call', async
 });
 
 test('open throws a distinct error naming MentioraHost when configured but no host is mounted', async () => {
-  // Configured but no host must say so, rather than repeating the configure message.
   Mentiora.configure(cfg);
   await expect(Mentiora.open()).rejects.toThrow(/MentioraHost/);
 });
 
-test('two mounted hosts never render two Modals — the oldest-mounted one owns it', async () => {
-  // Two hosts overlap only during a transition; oldest-mounted wins, so two Modals never show.
+test('two mounted hosts never render two overlays — the oldest-mounted one owns it', async () => {
   Mentiora.configure(cfg);
   await render(
     <>
@@ -176,7 +178,7 @@ test('two mounted hosts never render two Modals — the oldest-mounted one owns 
   expect(screen.getAllByTestId('mentiora-webview')).toHaveLength(1);
 });
 
-test('after the active host unmounts, a surviving host takes over the Modal', async () => {
+test('after the active host unmounts, a surviving host takes over the overlay', async () => {
   // `activeHostId` moves to a survivor, never `null`: dropping it lets `open()` succeed silently.
   Mentiora.configure(cfg);
   const view = await render(<TwoHosts showFirst={true} />);
@@ -228,21 +230,121 @@ test('close before configure is a no-op, not a throw', () => {
   }).not.toThrow();
 });
 
-test('reopening remounts the WebView — the reload is intended, not a bug', async () => {
+test('reopening reuses the warm WebView — no remount, no reload', async () => {
+  // The reverse of what this file used to assert. Closing parks the overlay instead of
+  // unmounting it, so the document and its JS context survive and the second open costs
+  // a transform. Neither a new instance nor a `reload()` may appear.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
     await Mentiora.open();
   });
   const first = __lastWebView();
+  await handshake(screen.getByTestId('mentiora-webview'));
+  await act(async () => {
+    Mentiora.close();
+  });
+  expect(overlayParked()).toBe(true);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  expect(__lastWebView()).toBe(first);
+  expect(first.reload).not.toHaveBeenCalled();
+  expect(overlayParked()).toBe(false);
+});
+
+test('a warm show tells the page it is on screen again', async () => {
+  // The page's launch signal is once-per-document. Reused, it never fires again, so the
+  // second open would be invisible to the widget's own dwell and open/close funnel.
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  await handshake(screen.getByTestId('mentiora-webview'));
+  await act(async () => {
+    Mentiora.close();
+  });
+  const before = sent().length;
+  await act(async () => {
+    await Mentiora.open();
+  });
+  expect(sent().slice(before).at(-1)).toMatchObject({ method: 'mentiora/show' });
+});
+
+test('configure with a NEW identity reloads the warm page; an unchanged one does not', async () => {
+  // Warm, no second `initialize` runs, so a signed-in user reopening would otherwise keep
+  // the anonymous credential the page booted with.
+  const identity = { getToken: () => 't1' };
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  const view = __lastWebView();
+  await handshake(screen.getByTestId('mentiora-webview'));
+  await act(async () => {
+    Mentiora.close();
+  });
+
+  // `strings` changes freely: only identity may cost a reload.
+  await act(async () => {
+    Mentiora.configure({ ...cfg, strings: { ...DEFAULT_STRINGS } });
+  });
+  expect(view.reload).not.toHaveBeenCalled();
+
+  await act(async () => {
+    Mentiora.configure({ ...cfg, identity });
+  });
+  expect(screen.getByTestId('mentiora-webview', { includeHiddenElements: true })).toBeTruthy();
+  expect(__lastWebView()).not.toBe(view); // restartLoad remounts, which is a fresh document
+});
+
+test('a warm reopen does not arm a watchdog — no second initialize is coming', async () => {
+  // The document already handshaked, so an armed watchdog has nothing to disarm it and
+  // would silently reload a working widget one budget later.
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  const view = __lastWebView();
+  await handshake(screen.getByTestId('mentiora-webview'));
   await act(async () => {
     Mentiora.close();
   });
   await act(async () => {
     await Mentiora.open();
   });
-  expect(__lastWebView()).not.toBe(first);
-  expect(first.reload).not.toHaveBeenCalled(); // a remount, not a reload of the old one
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(20000);
+  });
+  expect(view.reload).not.toHaveBeenCalled();
+  expect(__lastWebView()).toBe(view);
+});
+
+test('a parked widget does not claim the host app back button', async () => {
+  // Mounted no longer implies on screen. A page still holding back must not swallow
+  // presses meant for the host app's own navigator.
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  const el = screen.getByTestId('mentiora-webview');
+  await handshake(el);
+  await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
+  await act(async () => {
+    Mentiora.close();
+  });
+  const view = __lastWebView();
+  const before = sentFrom(view).length;
+  expect(pressBack()).toBe(false);
+  expect(
+    sentFrom(view)
+      .slice(before)
+      .some((message) => message.method === 'mentiora/back'),
+  ).toBe(false);
 });
 
 test('logout before configure throws, naming the missing call', async () => {
@@ -250,7 +352,7 @@ test('logout before configure throws, naming the missing call', async () => {
   await expect(Mentiora.logout()).rejects.toThrow(/configure/);
 });
 
-test('logout with the Modal closed and no inline widget still rotates the install id', async () => {
+test('logout with the overlay parked and no inline widget still rotates the install id', async () => {
   Mentiora.configure(cfg);
   const bytesOf =
     (fill: number) =>
@@ -283,9 +385,8 @@ test('after a closed-state logout the next open initializes with the rotated ins
 });
 
 test('logout reloads an inline widget onto a page that can handshake, under a new session key', async () => {
-  // The widget subscribes to `runtime.onReload` itself, so a test's own listener cannot
-  // catch one that never subscribed. Asserting the outcome, not the instance swap: without
-  // `beginFreshLoad()` the remounted page's `initialize` takes -32600 under the old key.
+  // The widget subscribes to `runtime.onReload` itself, so a test listener cannot stand in.
+  // Without `beginFreshLoad()` the remounted page's `initialize` gets -32600 under the old key.
   Mentiora.configure(cfg);
   await render(<MentioraWidget {...cfg} />);
   const before = __lastWebView();
@@ -339,7 +440,7 @@ test('an inline widget unsubscribes from runtime.onReload on unmount', async () 
   expect(off).toHaveBeenCalled();
 });
 
-test('onRequestClose forwards mentiora/back to the page while it holds the button, and stays open', async () => {
+test('android back forwards mentiora/back to the page while it holds the button, and stays open', async () => {
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -349,13 +450,13 @@ test('onRequestClose forwards mentiora/back to the page while it holds the butto
   await handshake(el);
   await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
   await act(async () => {
-    requestClose();
+    pressBack();
   });
   expect(sent().at(-1)).toMatchObject({ method: 'mentiora/back' });
-  expect(screen.getByTestId('mentiora-webview')).toBeTruthy(); // still open
+  expect(screen.getByTestId('mentiora-webview')).toBeTruthy();
 });
 
-test('onRequestClose dismisses only once the page released the back button', async () => {
+test('android back closes only once the page released the back button', async () => {
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
@@ -365,17 +466,17 @@ test('onRequestClose dismisses only once the page released the back button', asy
   await handshake(el);
   await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
   await act(async () => {
-    requestClose();
+    pressBack();
   });
-  expect(screen.queryByTestId('mentiora-webview')).toBeTruthy(); // still open
+  expect(screen.queryByTestId('mentiora-webview')).toBeTruthy();
   await fireEvent(el, 'message', { nativeEvent: { data: backHandling(false) } });
   await act(async () => {
-    requestClose();
+    pressBack();
   });
   expect(screen.queryByTestId('mentiora-webview')).toBeNull(); // now it dismisses
 });
 
-test('onRequestClose dismisses even while the page holds back, once the error surface is up', async () => {
+test('android back closes even while the page holds back, once the error surface is up', async () => {
   // The WebView stays mounted under the error surface, so its pre-crash registration still reads.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
@@ -390,11 +491,10 @@ test('onRequestClose dismisses even while the page holds back, once the error su
   const view = __lastWebView();
   const sentBeforeClose = sentFrom(view).length;
   await act(async () => {
-    requestClose();
+    pressBack();
   });
-  // `includeHiddenElements`: RNTL's default queries exclude
-  // `importantForAccessibility="no-hide-descendants"`, so a plain query reads `null` when mounted.
-  expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
+  // The WebView stays mounted and warm; parking the overlay is what "dismissed" means now.
+  expect(overlayParked()).toBe(true);
   expect(
     sentFrom(view)
       .slice(sentBeforeClose)
@@ -402,7 +502,7 @@ test('onRequestClose dismisses even while the page holds back, once the error su
   ).toBe(false);
 });
 
-test('a transient reload does not leave the Modal back button dead', async () => {
+test('a transient reload does not leave the overlay back button dead', async () => {
   // `onHardwareBack` re-checks `peer.sessionKey()` at press time: one transient load failure
   // resets the key with no error surface, and a stale flag then sends back to nobody.
   Mentiora.configure(cfg);
@@ -421,9 +521,9 @@ test('a transient reload does not leave the Modal back button dead', async () =>
   const view = __lastWebView();
   const sentBeforeClose = sentFrom(view).length;
   await act(async () => {
-    requestClose();
+    pressBack();
   });
-  expect(screen.queryByTestId('mentiora-webview')).toBeNull(); // dismissed, not left inert
+  expect(screen.queryByTestId('mentiora-webview')).toBeNull();
   expect(
     sentFrom(view)
       .slice(sentBeforeClose)
@@ -431,7 +531,7 @@ test('a transient reload does not leave the Modal back button dead', async () =>
   ).toBe(false);
 });
 
-test('an inline widget on the same embed key does not hijack the Modal back channel', async () => {
+test('an inline widget on the same embed key does not hijack the overlay back channel', async () => {
   // Two widgets on one embed key: keying the back channel by embedKey would cross them.
   Mentiora.configure(cfg);
   await render(
@@ -452,7 +552,7 @@ test('an inline widget on the same embed key does not hijack the Modal back chan
     await Mentiora.open();
   });
   await act(async () => {
-    requestClose();
+    pressBack();
   });
 
   // Keyed per widget instance through a context, so the inline widget is never consulted.
@@ -464,7 +564,7 @@ test('an inline widget on the same embed key does not hijack the Modal back chan
   ).toBe(false);
 });
 
-test('after Retry recovers from an error, the Modal honours a fresh back hold again', async () => {
+test('after Retry recovers from an error, the overlay honours a fresh back hold again', async () => {
   // `errorCode !== null` is read live, so Retry re-enables back; a latch would never clear.
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
@@ -479,13 +579,13 @@ test('after Retry recovers from an error, the Modal honours a fresh back hold ag
   await handshake(el);
   await fireEvent(el, 'message', { nativeEvent: { data: backHandling(true) } });
   await act(async () => {
-    requestClose();
+    pressBack();
   });
   expect(sent().at(-1)).toMatchObject({ method: 'mentiora/back' });
-  expect(screen.getByTestId('mentiora-webview')).toBeTruthy(); // still open
+  expect(screen.getByTestId('mentiora-webview')).toBeTruthy();
 });
 
-test('a host onEvent that throws on close still lets the presenter close the Modal', async () => {
+test('a host onEvent that throws on close still lets the presenter park the overlay', async () => {
   // The wrapper must do its bookkeeping before the host's `onEvent`: the Dismiss path's
   // try/catch would swallow a later `Mentiora.close()`, stranding a visible Modal.
   const throwingConfig = {
@@ -506,13 +606,13 @@ test('a host onEvent that throws on close still lets the presenter close the Mod
   });
   expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
   // The line above passes even when `Mentiora.close()` never ran, since Dismiss renders
-  // `<View />` first either way. The Modal is what gets stranded, so assert the Modal.
-  expect(modalHosts()).toHaveLength(0);
+  // `<View />` first either way. The overlay is what gets stranded, so assert the overlay.
+  expect(overlayParked()).toBe(true);
 });
 
-// A host that renders and never commits leaves a phantom id at `hostIds[0]`. Handing
-// ownership there rather than to `subscribedIds[0]` gives it to the phantom on the first
-// real unmount, and every surviving host renders `null` for the rest of the process.
+// A host that renders and never commits leaves a phantom id at `hostIds[0]`. Ownership must
+// pass to `subscribedIds[0]`, or the phantom takes it on the first real unmount and every
+// surviving host renders `null` for the rest of the process.
 function Suspends({ gate }: { gate: Promise<void> }): null {
   throw gate;
 }
@@ -569,9 +669,8 @@ test('logout revives a dismissed inline widget rather than restarting a blank on
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
-// `hostIds` is pushed from the layout phase: from the render body a discarded render
-// leaves its id forever and the next host to commit pops a Modal with no `open()` behind
-// it. Layout keeps the cases above green — it runs before any passive effect, and only on commit.
+// `hostIds` is pushed from the layout phase. Pushed from the render body, a discarded render
+// leaves its id forever and the next host to commit pops a Modal with no `open()` behind it.
 test('a host render that never commits neither satisfies open() nor pops a Modal', async () => {
   Mentiora.configure(cfg);
   const gate = new Promise<void>(() => {}); // never settles: the boundary stays in fallback

@@ -40,9 +40,23 @@ const identity = {
 />
 ```
 
-Or present it over your app. Mount `<MentioraHost />` once, at your app root
-above the navigator — it renders nothing until `open()` is called, and is
-what gives `open()` somewhere to present the widget's `Modal`:
+Inline, **you** own the container, so you own how often the page loads. A widget on
+a screen your navigator unmounts is destroyed with it, and the next visit is a fresh
+load. To keep it warm, mount it somewhere that outlives the screen and pass
+`visible={false}` rather than unmounting it:
+
+```tsx
+<MentioraWidget {...config} visible={onSupportTab} />
+```
+
+Parked that way it keeps its page and JS context, stops claiming the Android back
+button, and is hidden from screen readers. Hide it with that prop, not with
+`display: 'none'` or a zero size: iOS destroys a `WKWebView` that leaves the view
+hierarchy, which is the document you were trying to keep.
+
+Or present it over your app. Mount `<MentioraHost />` once, at your app root and
+as the **last** child, so its overlay draws over your navigator. It renders
+nothing until the first `open()`:
 
 ```tsx
 import { Mentiora, MentioraHost } from '@mentiora/react-native-sdk';
@@ -52,8 +66,8 @@ Mentiora.configure({ widgetOrigin, embedKey, identity });
 export default function App() {
   return (
     <>
-      <MentioraHost />
       <YourNavigator />
+      <MentioraHost />
     </>
   );
 }
@@ -69,11 +83,16 @@ await Mentiora.logout(); // rotates the install id and drops the cached token
 
 `Mentiora.open()` throws if `<MentioraHost />` isn't mounted yet.
 
-**Every `open()` reloads the page, and that is deliberate.** Nothing stays
-mounted while the panel is closed, so each open resumes the thread from server
-state — which is what makes messages that arrived in the meantime appear. The
-cost is a page load on every open; the benefit is that you never see stale
-state. There is no signal while the panel is closed in v0: no badge, no push.
+**The first `open()` loads the page; later ones do not.** Closing parks the
+widget off-screen instead of destroying it, so the page and its JS context
+survive and reopening costs a transform. Measured against a real deployment,
+`open()` to `ready` was 2,538 ms cold and 1,470 ms on a reopen even with the
+bundle already cached — that second number is parse and execute, which only a
+live page avoids.
+
+Nothing is mounted until the first `open()`, so a user who never opens the
+widget costs you no WebView. A parked widget does not claim the Android back
+button. There is no signal while the panel is closed in v0: no badge, no push.
 
 Omit `identity` for anonymous chat. `widgetOrigin` and `embedKey` come from the
 install snippet in Mentiora admin.

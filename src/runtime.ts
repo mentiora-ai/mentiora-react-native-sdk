@@ -1,8 +1,7 @@
 /**
  * The shared runtime, one per embed key. WebView, peer and session key are per
  * page load; storage, the install id and the identity provider are shared per
- * `embedKey`, or a widget and a `Mentiora.open()` Modal each mint an id and
- * become two anonymous users.
+ * `embedKey` so a widget and a `Mentiora.open()` Modal are the same anonymous user.
  */
 import { createIdentityProvider, type IdentityProvider, type LogoutEpoch } from './identity.js';
 import { loadOrCreateInstallId, rotateInstallId } from './install-id.js';
@@ -13,13 +12,20 @@ import type { MentioraConfig, MentioraIdentity, MentioraStorage } from './types.
 export type RandomBytes = (n: number) => Promise<Uint8Array>;
 
 export type MentioraRuntime = {
-  /** Single-flight; takes the CALLER's random source, never a captured one. */
+  /** Single-flight; uses the calling WebView's random source. */
   installId: (randomBytes: RandomBytes) => Promise<string>;
   identity: IdentityProvider;
   /** `resolveStorage`'s result minus the store, discriminated on `ephemeral`. */
   storage: StorageStatus;
-  logout: () => Promise<void>; // rotate + clear identity; reloads are the caller's job
-  onReload: (fn: () => void) => () => void; // mounted widgets subscribe
+  /** Rotates the install id and clears identity; subscribers reload. */
+  logout: () => Promise<void>;
+  /**
+   * Reloads every mounted widget without touching the install id or the identity cache.
+   * A warm page keeps the credential it booted with, and only a new document runs
+   * `initialize` again — so a changed identity has to force one.
+   */
+  reload: () => void;
+  onReload: (fn: () => void) => () => void;
 };
 
 type RuntimeEntry = {
@@ -28,14 +34,12 @@ type RuntimeEntry = {
   embedKey: string;
   /** The `config.identity` reference the live provider was built from. */
   identityRef: MentioraIdentity | undefined;
-  /** Shared by every provider this entry owns, so a mint parked in a discarded
-   *  one cannot write `wasSignedIn` after a logout. */
   epoch: LogoutEpoch;
 };
 
 const runtimes = new Map<string, RuntimeEntry>();
 
-/** Tests only. Clears every cached runtime so each test starts from nothing. */
+/** Tests only. */
 export const __resetRuntimes = (): void => {
   runtimes.clear();
 };
@@ -46,18 +50,17 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   const resolved = resolveStorage(config.storage);
   const { storage } = resolved;
 
-  // Single-flight over the IN-FLIGHT PROMISE, not the value, or two first
-  // callers each mint an id. `randomBytes` is per call: a captured one injects
-  // into a page that may be busy or already unmounted.
+  // Memoises the in-flight promise so two concurrent first callers share one id.
+  // `randomBytes` is per call: a captured one may belong to an unmounted page.
   let inFlight: Promise<string> | undefined;
-  // Held for a `logout()`'s rotation and awaited by every new mint: dropping
-  // the memo alone lets a call re-memoise the old id before `removeItem`.
+  // Set during `logout()`'s rotation and awaited by every new mint, or a call
+  // could re-read the old id before `removeItem` lands.
   let rotation: Promise<void> | undefined;
   const installId = (randomBytes: RandomBytes): Promise<string> => {
     if (!inFlight) {
       const pendingRotation = rotation;
-      // `if (inFlight === p)`, never an unconditional null: this mint can
-      // settle after a post-logout caller installed a newer memo.
+      // Conditional reset: this mint can settle after a post-logout caller
+      // installed a newer memo.
       const p: Promise<string> = (async () => {
         await pendingRotation;
         return await loadOrCreateInstallId({ storage, embedKey, randomBytes });
@@ -76,6 +79,9 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   };
 
   const runtime: MentioraRuntime = {
+    reload: () => {
+      for (const fn of subscribers) fn();
+    },
     installId,
     identity: createIdentityProvider({ identity: config.identity, embedKey, storage, epoch }),
     storage: resolved.ephemeral
@@ -83,21 +89,21 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       : { ephemeral: false, reason: resolved.reason },
     onReload,
     logout: async () => {
-      // Captured before the first await, or a provider swapped in mid-rotation
-      // escapes the logout. The one live at the end is cleared too, below.
+      // Captured before the first await; a provider swapped in mid-rotation is
+      // cleared separately below.
       const clearing = runtime.identity;
-      // Let the prior mint SETTLE before the delete, unbounded: a mint blocked
-      // in `setItem` would commit after `removeItem` and survive its rotation.
+      // Wait for the prior mint to settle: one blocked in `setItem` would
+      // otherwise commit after `removeItem` and survive the rotation.
       const prior = inFlight;
       inFlight = undefined;
       const rotating = (async () => {
         await prior?.catch(() => undefined);
         await rotateInstallId({ storage, embedKey });
       })();
-      // The `.catch`ed wrapper: a rejected `removeItem` must not be re-thrown
-      // by every later `installId()` for the life of the process.
+      // Caught, so a rejected `removeItem` is not re-thrown by every later
+      // `installId()` for the life of the process.
       rotation = rotating.catch(() => undefined);
-      // Collected: throwing here would skip the clear and the subscribers.
+      // Errors are collected so the clear and the subscribers still run.
       const errors: unknown[] = [];
       try {
         await rotating;
@@ -106,8 +112,6 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
       } finally {
         rotation = undefined;
       }
-      // Rotate, then clear; a swallowed `clear()` rejection leaves
-      // `wasSignedIn` on an anonymous install. Subscribers fire regardless.
       try {
         await clearing.clear();
         const live = runtime.identity;
@@ -124,11 +128,9 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
   return { runtime, storage, embedKey, identityRef: config.identity, epoch };
 };
 
-/** One runtime per `embedKey`, last configuration wins: a different
- *  `config.identity` reference swaps a fresh provider in place (reference
- *  equality, so an inline literal rebuilds every render), and the discarded one
- *  is never `clear()`ed — that drops `wasSignedIn`. `identity` is the only
- *  field reconciled: a new `config.storage` would strand the minted id. */
+/** One runtime per `embedKey`. A new `config.identity` reference swaps in a
+ *  fresh provider without clearing the old one, which would drop `wasSignedIn`.
+ *  Only `identity` is reconciled; a new `config.storage` would strand the id. */
 export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
   const existing = runtimes.get(config.embedKey);
   if (existing) {
@@ -137,7 +139,6 @@ export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
         identity: config.identity,
         embedKey: existing.embedKey,
         storage: existing.storage,
-        // The entry's epoch, so a discarded provider's mint stays in scope.
         epoch: existing.epoch,
       });
       existing.identityRef = config.identity;
