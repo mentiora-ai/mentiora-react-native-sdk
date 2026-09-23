@@ -7,6 +7,21 @@ const root = path.resolve(__dirname, '..');
 const config = getDefaultConfig(__dirname);
 
 config.watchFolders = [...config.watchFolders, root];
+
+// Watching the whole root means the SDK's own build outputs look like source edits:
+// `bun run build` writes `lib/`, `test:core` writes `lib-test/`, and each run made Metro
+// rebundle and reload the running app mid-use. Only `src/` is ever resolved from the root,
+// so the rest is noise.
+const IGNORED_IN_ROOT = ['lib', 'lib-test', 'dist', 'coverage', '.git', '.specs'];
+const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+config.resolver.blockList = [
+  ...(Array.isArray(config.resolver.blockList)
+    ? config.resolver.blockList
+    : config.resolver.blockList
+      ? [config.resolver.blockList]
+      : []),
+  new RegExp(`^${escapedRoot}/(${IGNORED_IN_ROOT.join('|')})/.*`),
+];
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
   '@mentiora/react-native-sdk': root,
