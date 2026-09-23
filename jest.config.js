@@ -7,8 +7,10 @@ module.exports = {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  // bun stores packages under `node_modules/.bun/<pkg>/node_modules/<name>/`; without the
+  // `\\.bun/` exception the first `node_modules/` match excludes them from transformation.
   transformIgnorePatterns: [
-    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|react-native-webview|@react-native-async-storage)/)',
+    'node_modules/(?!\\.bun/|((jest-)?react-native|@react-native(-community)?|react-native-webview|@react-native-async-storage)/)',
   ],
   collectCoverageFrom: ['src/**/*.{ts,tsx}'], // never counts example/
 };

@@ -4,7 +4,25 @@ import { wasSignedInKey } from './identity.js';
 import { createRandomSource, toBase64Url } from './random.js';
 import { __resetRuntimes, getRuntime } from './runtime.js';
 
-const cfg = (embedKey: string) => ({ widgetOrigin: 'https://w.x.ai', embedKey });
+// Carries its own store: under `node --test` the AsyncStorage peer resolves to its web
+// build, whose `getItem` throws on `window.localStorage`. `getRuntime` keeps the first
+// storage per embed key, so tests that observe the store pass theirs on first call.
+const cfg = (embedKey: string) => {
+  const store = new Map<string, string>();
+  return {
+    widgetOrigin: 'https://w.x.ai',
+    embedKey,
+    storage: {
+      getItem: async (k: string) => store.get(k) ?? null,
+      setItem: async (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: async (k: string) => {
+        store.delete(k);
+      },
+    },
+  };
+};
 
 // Distinct bytes per call: a constant fill makes every `notEqual` below meaningless.
 let seed = 0;
@@ -253,7 +271,7 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
   const rt = getRuntime({ ...cfg('race'), storage });
   const before = await rt.installId(bytes);
 
-  const loggingOut = rt.logout(); // not awaited: we want the window it opens
+  const loggingOut = rt.logout(); // not awaited, to hold its window open
   const racing = rt.installId(bytes); // lands inside it
   land();
   await loggingOut;
@@ -266,8 +284,8 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
 });
 
 // A `rotation` left pointing at a rejected promise makes every later `installId()`
-// re-throw a dead failure — a permanent error screen. Split in two because two
-// independent lines each stop it on their own.
+// re-throw a dead failure, a permanent error screen. Two tests, one per line of code
+// that prevents it.
 const failingRotation = () => {
   const store = new Map<string, string>();
   let failRemove = true;
@@ -296,7 +314,7 @@ test('a mint landing DURING a failing logout does not inherit the failure', asyn
   const rt = getRuntime({ ...cfg('poison-concurrent'), storage });
   const before = await rt.installId(bytes);
 
-  const loggingOut = rt.logout(); // not awaited: we want the window it opens
+  const loggingOut = rt.logout(); // not awaited, to hold its window open
   const racing = rt.installId(bytes); // parks on `rotation`, whatever it is
 
   await assert.rejects(loggingOut, /disk full/, 'the failure must still reach the caller');
@@ -485,7 +503,7 @@ test('a prior mint settling after logout does not erase the post-logout memo', a
     },
   };
 
-  const rt = getRuntime({ ...cfg('f2'), storage });
+  const rt = getRuntime({ ...cfg('key-2'), storage });
   const prior = rt.installId(bytes); // parked inside setItem
   const loggingOut = rt.logout(); // drops the memo, parks new mints on the rotation
   const postLogout = rt.installId(bytes); // the NEW memo, parked on the rotation
@@ -521,7 +539,7 @@ test('a provider discarded by an identity swap is still inside a later logout', 
   };
   let release!: (token: string) => void;
   const rt = getRuntime({
-    ...cfg('f3'),
+    ...cfg('key-3'),
     storage,
     identity: {
       getToken: () =>
@@ -533,14 +551,14 @@ test('a provider discarded by an identity swap is still inside a later logout', 
   const booting = rt.identity.initial(); // parked inside getToken on the FIRST provider
 
   // A fresh object literal: `getRuntime` swaps the provider, its mint still live.
-  getRuntime({ ...cfg('f3'), storage, identity: { getToken: () => 'second' } });
+  getRuntime({ ...cfg('key-3'), storage, identity: { getToken: () => 'second' } });
 
   await rt.logout();
   release('first'); // the discarded provider's mint resumes, post-logout
   await booting;
 
   assert.equal(
-    store.get(wasSignedInKey('f3')),
+    store.get(wasSignedInKey('key-3')),
     undefined,
     'a discarded provider must not mark a logged-out install as signed in',
   );
@@ -561,9 +579,9 @@ test('a rejecting rotation still clears identity, still reloads, and still rejec
       store.delete(k);
     },
   };
-  const rt = getRuntime({ ...cfg('f6'), storage, identity: { getToken: () => 'tok' } });
+  const rt = getRuntime({ ...cfg('key-6'), storage, identity: { getToken: () => 'tok' } });
   await rt.identity.initial(); // sets the wasSignedIn marker
-  assert.equal(store.get(wasSignedInKey('f6')), '1', 'precondition');
+  assert.equal(store.get(wasSignedInKey('key-6')), '1', 'precondition');
 
   let reloads = 0;
   rt.onReload(() => {
@@ -572,5 +590,5 @@ test('a rejecting rotation still clears identity, still reloads, and still rejec
 
   await assert.rejects(rt.logout(), /install id removal failed/);
   assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout session');
-  assert.equal(store.get(wasSignedInKey('f6')), undefined, 'identity must be cleared anyway');
+  assert.equal(store.get(wasSignedInKey('key-6')), undefined, 'identity must be cleared anyway');
 });

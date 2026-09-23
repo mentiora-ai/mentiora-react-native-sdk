@@ -505,3 +505,40 @@ test("a stale mint's undo cannot erase a newer mint's marker or cache", async ()
   await p.refresh();
   assert.equal(hits, before, "the newer mint's cache must survive too");
 });
+
+// `retry` bounds the delays between attempts, never an attempt itself. Without a deadline
+// an endpoint that accepts the connection and never answers leaves boot pending forever,
+// surfacing as neither `identityError` nor `handshake_timeout`.
+test('a fetch that never settles is aborted on the policy budget rather than hanging boot', async () => {
+  let aborted = false;
+  const provider = createIdentityProvider({
+    identity: { endpoint: 'https://id.example/token' },
+    embedKey: 'k',
+    storage: memory().storage,
+    // Never resolves on its own; only the abort signal can end it.
+    fetchImpl: ((_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        // Both paths: the deadline can fire before this runs as well as during it.
+        if (init?.signal?.aborted) {
+          aborted = true;
+          reject(new Error('aborted'));
+          return;
+        }
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('aborted'));
+        });
+      })) as unknown as typeof fetch,
+    // Fire the deadline immediately; assert the wiring, not the wall clock.
+    setTimer: (fn: () => void) => {
+      fn();
+      return 0;
+    },
+    clearTimer: () => {},
+    sleep: async () => {},
+  });
+
+  const token = await provider.initial();
+  assert.equal(aborted, true, 'the in-flight request must be aborted by the deadline');
+  assert.equal(token, undefined, 'never signed in, so an unreachable endpoint boots anonymous');
+});

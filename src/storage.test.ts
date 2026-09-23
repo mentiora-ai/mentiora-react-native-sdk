@@ -150,3 +150,18 @@ test('a peer that loads is still used through the seam', () => {
   assert.equal(r.storage, peer);
   assert.equal(r.reason, 'peer-loaded');
 });
+
+// The only case that loads the real peer, so it catches an export-shape change the
+// injected `load`s cannot. No method is called: under `node --test` the peer resolves
+// to its web build, whose `getItem` throws on `window.localStorage`.
+test('the installed AsyncStorage peer still exports a default carrying the storage methods', () => {
+  const loaded = defaultLoad();
+  assert.ok(loaded, 'defaultLoad() returned null — the peer no longer exposes `.default`');
+  for (const method of ['getItem', 'setItem', 'removeItem'] as const) {
+    assert.equal(
+      typeof loaded[method],
+      'function',
+      `the peer's default export is missing ${method}`,
+    );
+  }
+});

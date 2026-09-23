@@ -1,9 +1,8 @@
 /**
  * Identity: the token the server uses to decide who the user is; none means
- * anonymous, keyed to the install id. `initial()` runs in the page's 8s
- * handshake (`BOOT_RETRY_POLICY`), `refresh()` in its 30s request timeout
- * (`REFRESH_RETRY_POLICY`). A boot failure on an install `wasSignedInKey` has
- * flagged throws rather than demoting the user. Only that flag is persisted.
+ * anonymous, keyed to the install id. `initial()` runs within the page's 8s
+ * handshake, `refresh()` within its 30s request timeout. A boot failure on an
+ * install flagged by `wasSignedInKey` throws. Only that flag is persisted.
  */
 
 import { type RetryPolicy, retry } from './retry.js';
@@ -15,8 +14,7 @@ export type LogoutEpoch = { n: number };
 
 export type IdentityProvider = {
   /** Boot: the token for InitializeResult, or undefined for anonymous. Throws
-   *  IdentityUnavailable when the fetch fails on a previously signed-in
-   *  install, so the caller fails the handshake instead of demoting the user. */
+   *  IdentityUnavailable when the fetch fails on a previously signed-in install. */
   initial: () => Promise<string | undefined>;
   /** mentiora/refreshIdentity. Throws IdentityUnavailable to produce -32002. */
   refresh: () => Promise<string>;
@@ -138,22 +136,26 @@ export const createIdentityProvider = (deps: {
   embedKey: string;
   storage: MentioraStorage;
   fetchImpl?: typeof fetch;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   warn?: (m: string) => void;
-  /** Owned by the runtime entry, not by this provider — see `LogoutEpoch`. */
+  /** Owned by the runtime entry; see `LogoutEpoch`. */
   epoch?: LogoutEpoch;
 }): IdentityProvider => {
   const { identity, embedKey, storage, warn } = deps;
   const fetchImpl = deps.fetchImpl ?? fetch;
+  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  const clearTimer =
+    deps.clearTimer ?? ((h: unknown) => clearTimeout(h as Parameters<typeof clearTimeout>[0]));
   const now = deps.now ?? Date.now;
 
   let cache: { token: string; expMs: number } | undefined;
 
-  // Bumped synchronously at the top of `clear()`. An acquisition captures it
-  // on entry and re-checks before each write and before returning; a mismatch
-  // means the token's user has logged out, so it is dropped, not published.
+  // Bumped synchronously in `clear()`. A mint captures it on entry and re-checks
+  // before each write and before returning; a mismatch drops the token.
   const epoch = deps.epoch ?? { n: 0 };
 
   // Owns the stored marker, so a stale mint only undoes its own write.
@@ -162,18 +164,28 @@ export const createIdentityProvider = (deps: {
   const isFresh = (floorMs: number): boolean =>
     cache !== undefined && now() < cache.expMs - floorMs;
 
-  const fetchRawToken = async (id: MentioraIdentity): Promise<string> => {
+  // `retry` bounds only the delays between attempts, and the widget's handshake
+  // watchdog is paused during the boot mint, so an endpoint that never answers
+  // would hang boot without this timeout. Hermes lacks `AbortSignal.timeout`.
+  const fetchRawToken = async (id: MentioraIdentity, timeoutMs: number): Promise<string> => {
     if ('getToken' in id) return await id.getToken();
 
     const headers = id.headers ? await id.headers() : undefined;
     const body = id.body ? await id.body() : undefined;
-    const res = await fetchImpl(id.endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`identity endpoint responded with ${res.status}`);
-    return extractToken(await res.json());
+    const controller = new AbortController();
+    const timer = setTimer(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetchImpl(id.endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`identity endpoint responded with ${res.status}`);
+      return extractToken(await res.json());
+    } finally {
+      clearTimer(timer);
+    }
   };
 
   const mintToken = async (policy: RetryPolicy, id: MentioraIdentity): Promise<string> => {
@@ -182,7 +194,12 @@ export const createIdentityProvider = (deps: {
 
     let raw: string;
     try {
-      raw = await retry(() => fetchRawToken(id), policy, deps.sleep, deps.random);
+      raw = await retry(
+        () => fetchRawToken(id, policy.totalBudgetMs),
+        policy,
+        deps.sleep,
+        deps.random,
+      );
     } catch (err) {
       throw new IdentityUnavailable(err instanceof Error ? err.message : 'identity fetch failed');
     }
