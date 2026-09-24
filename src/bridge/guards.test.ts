@@ -11,7 +11,6 @@ test('parseInbound rejects non-JSON and non-2.0 envelopes', () => {
 test('a request needs a non-empty string id, a method and params', () => {
   const ok = parseInbound('{"jsonrpc":"2.0","id":"r1","method":"mentiora/openUrl","params":{}}');
   assert.ok(ok && isRequest(ok));
-  // numeric ids are forbidden by the contract
   assert.equal(parseInbound('{"jsonrpc":"2.0","id":1,"method":"m","params":{}}'), null);
   assert.equal(parseInbound('{"jsonrpc":"2.0","id":"","method":"m","params":{}}'), null);
 });

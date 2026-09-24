@@ -51,7 +51,7 @@ test('acceptReply returns false for anything that is not its own reply', () => {
 });
 
 test('rejects after the 2s bound when no reply arrives', async () => {
-  let fire!: () => void; // not `| null`: TS2349, same as the peer tests
+  let fire!: () => void; // not `| null`: TS2349
   const src = createRandomSource({
     inject: () => {},
     setTimer: (fn) => {

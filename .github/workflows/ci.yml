@@ -109,6 +109,7 @@ jobs:
           import type {
             MentioraConfig,
             MentioraErrorCode,
+            MentioraErrorRenderProps,
             MentioraEvent,
             MentioraIdentity,
             MentioraIdentityCallback,
@@ -144,12 +145,16 @@ jobs:
             { type: 'storageUnavailable', reason },
           ];
 
+          // `.ts`, so no JSX: `null` is a valid ReactNode.
+          const renderError = ({ code: shown, retry, dismiss }: MentioraErrorRenderProps) =>
+            shown === 'load_failed' ? (retry(), null) : (dismiss(), null);
+
           const config: MentioraConfig = {
-            widgetOrigin: 'https://widget.acme.mentiora.ai',
-            embedKey: 'pk_wgt_x',
+            widgetUrl: 'https://widget.acme.mentiora.ai/h/rn/pk_wgt_x',
             identity,
             storage,
             strings,
+            renderError,
             onEvent: (event: MentioraEvent) => void event,
             onOpenUrl: (url: string) => url.startsWith('https:'),
           };
@@ -159,8 +164,8 @@ jobs:
           const badCode: MentioraErrorCode = 'nope';
           // @ts-expect-error not a MentioraEvent variant
           const badEvent: MentioraEvent = { type: 'nope' };
-          // @ts-expect-error widgetOrigin is required
-          const badConfig: MentioraConfig = { embedKey: 'pk_wgt_x' };
+          // @ts-expect-error widgetUrl is required
+          const badConfig: MentioraConfig = { identity };
           // @ts-expect-error 'override' means storage WORKS: it can never accompany the event
           const badReason: StorageUnavailableReason = 'override';
 

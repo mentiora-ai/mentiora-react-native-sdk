@@ -3,7 +3,7 @@ import { MentioraWidget } from '@mentiora/react-native-sdk';
 import { router } from 'expo-router';
 import type React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { embedKey, identityFetcher, widgetOrigin } from '../src/config';
+import { identityFetcher, widgetUrl } from '../src/config';
 import { record } from '../src/event-log';
 import { usePrincipal } from '../src/session';
 
@@ -22,8 +22,7 @@ export default function InlineScreen(): React.JSX.Element {
   return (
     <View style={styles.container}>
       <MentioraWidget
-        widgetOrigin={widgetOrigin}
-        embedKey={embedKey}
+        widgetUrl={widgetUrl}
         identity={principal === 'anonymous' ? undefined : identityFetcher}
         onEvent={onEvent}
       />

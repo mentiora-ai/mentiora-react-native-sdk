@@ -34,8 +34,7 @@ const identity = {
 };
 
 <MentioraWidget
-  widgetOrigin="https://widget.acme.mentiora.ai"
-  embedKey="pk_wgt_a1b2c3d4e5f6"
+  widgetUrl="https://widget.acme.mentiora.ai/h/rn/pk_wgt_a1b2c3d4e5f6"
   identity={identity}
 />
 ```
@@ -61,7 +60,7 @@ nothing until the first `open()`:
 ```tsx
 import { Mentiora, MentioraHost } from '@mentiora/react-native-sdk';
 
-Mentiora.configure({ widgetOrigin, embedKey, identity });
+Mentiora.configure({ widgetUrl, identity });
 
 export default function App() {
   return (
@@ -94,14 +93,30 @@ Nothing is mounted until the first `open()`, so a user who never opens the
 widget costs you no WebView. A parked widget does not claim the Android back
 button. There is no signal while the panel is closed in v0: no badge, no push.
 
-Omit `identity` for anonymous chat. `widgetOrigin` and `embedKey` come from the
-install snippet in Mentiora admin.
+Omit `identity` for anonymous chat. `widgetUrl` is the hosted-page URL from the install
+snippet in Mentiora admin, `https://widget.<tenant>.mentiora.ai/h/rn/pk_wgt_…`, so one
+environment variable configures the SDK. Any other shape throws from `Mentiora.configure()`,
+or on `<MentioraWidget />`'s first render, rather than failing when the user taps.
 
 In normal operation the SDK renders no chat chrome: the page draws its own
 header and close control. The one surface it owns is the failure screen — if
 the page never loads, never completes the handshake, or the renderer keeps
 dying, the SDK overlays a message with Retry and Dismiss, because a page that
-cannot draw cannot draw a way out either.
+cannot draw cannot draw a way out either. It follows the system light or dark scheme, and
+`strings` overrides its copy.
+
+To match your app's design, render your own screen instead. It gets the same two actions,
+and `onEvent` still reports the `error`. Always offer `dismiss`: the screen covers the
+widget, so without it the user is stuck.
+
+```tsx
+Mentiora.configure({
+  widgetUrl,
+  renderError: ({ code, retry, dismiss }) => (
+    <BrandedError onRetry={retry} onClose={dismiss} />
+  ),
+});
+```
 
 ## Peer versions
 

@@ -23,6 +23,7 @@ import { BackChannelContext } from './back-channel.js';
 import { MentioraWidget } from './MentioraWidget.js';
 import { getRuntime } from './runtime.js';
 import type { MentioraConfig, MentioraEvent } from './types.js';
+import { parseWidgetUrl } from './widget-url.js';
 
 type PresenterState = {
   visible: boolean;
@@ -75,6 +76,8 @@ const getSnapshot = (): PresenterState => state;
 
 export const Mentiora = {
   configure(config: MentioraConfig): void {
+    // Here, not at `open()`: a bad URL fails at startup rather than on the user's tap.
+    parseWidgetUrl(config.widgetUrl);
     const previous = state.config;
     state = { ...state, config };
     notify();

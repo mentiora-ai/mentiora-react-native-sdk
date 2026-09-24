@@ -1,10 +1,8 @@
 /**
- * Hand-written guards for every inbound (page → host) JSON-RPC message; no
- * zod, the package keeps zero runtime dependencies. `id`, when present, is a
- * non-empty string, never a number. `params` is required, but a missing one
- * reads as `{}` rather than dropping, which would hang the sender for its
- * full 30s timeout; a response carries it too, since `params.sessionKey`
- * lives there. Unknown top-level fields are ignored.
+ * Guards for inbound (page → host) JSON-RPC messages. `id`, when present, is a
+ * non-empty string. A missing `params` reads as `{}`, since dropping the message
+ * would hang the sender for its 30s timeout. Responses carry `params` too, for
+ * `params.sessionKey`. Unknown top-level fields are ignored.
  */
 
 export type JsonRpcId = string;
@@ -51,7 +49,7 @@ const isErrorPayload = (v: unknown): v is InboundErrorPayload =>
   Number.isInteger(v.code) &&
   typeof v.message === 'string';
 
-// Structural only, and for `parseInbound`'s output: they do not default `params`.
+// Structural checks on `parseInbound`'s output; they do not default `params`.
 
 export function isRequest(v: unknown): v is InboundRequest {
   if (!isPlainObject(v)) return false;
@@ -76,7 +74,7 @@ export function isResponse(v: unknown): v is InboundResponse {
   if (!isJsonRpcId(v.id)) return false;
   const hasResult = 'result' in v && v.result !== undefined;
   const hasError = 'error' in v && v.error !== undefined;
-  if (hasResult === hasError) return false; // exactly one of result / error
+  if (hasResult === hasError) return false;
   if (hasError && !isErrorPayload(v.error)) return false;
   const hasParams = 'params' in v && v.params !== undefined;
   if (hasParams && !isJsonRpcParams(v.params)) return false;
@@ -98,7 +96,7 @@ export function parseInbound(raw: string): InboundMessage | null {
   if (parsed.jsonrpc !== '2.0') return null;
 
   const hasId = 'id' in parsed && parsed.id !== undefined;
-  if (hasId && !isJsonRpcId(parsed.id)) return null; // numeric / empty ids are invalid
+  if (hasId && !isJsonRpcId(parsed.id)) return null;
 
   const hasMethod = 'method' in parsed && parsed.method !== undefined;
   const hasResult = 'result' in parsed && parsed.result !== undefined;
@@ -123,7 +121,7 @@ export function parseInbound(raw: string): InboundMessage | null {
   if (!hasId) return null;
   const id = parsed.id;
   if (typeof id !== 'string') return null;
-  if (hasResult === hasError) return null; // exactly one of result / error
+  if (hasResult === hasError) return null;
 
   const rawParams = parsed.params;
   if (rawParams !== undefined && !isJsonRpcParams(rawParams)) return null;

@@ -4,29 +4,14 @@ import { issueIdentityToken } from './fake-backend';
 
 // Expo inlines `EXPO_PUBLIC_*` only for literal `process.env.EXPO_PUBLIC_X` access;
 // `process.env[name]` and destructuring silently yield `undefined`.
-const widgetUrl = process.env.EXPO_PUBLIC_MENTIORA_WIDGET_URL ?? '';
+export const widgetUrl = (process.env.EXPO_PUBLIC_MENTIORA_WIDGET_URL ?? '').trim();
 const identitySecret = process.env.EXPO_PUBLIC_MENTIORA_IDENTITY_SECRET ?? '';
 
-// Inverse of the SDK's `${widgetOrigin}/h/rn/${embedKey}`.
-const parsed = /^(https?:\/\/[^/]+)\/h\/rn\/([^/?#]+)/.exec(widgetUrl.trim());
+// The shape `Mentiora.configure()` accepts. Checked here too so a bad value shows the setup
+// screen instead of throwing from the first `configure()`.
+export const isConfigured = /^https?:\/\/[^/?#]+\/h\/rn\/[^/?#]+\/?$/.test(widgetUrl);
 
-const decodeOrEmpty = (raw: string | undefined): string => {
-  if (raw === undefined) return '';
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    // Throwing at module scope would prevent the setup screen from rendering.
-    return '';
-  }
-};
-
-export const widgetOrigin = parsed?.[1] ?? '';
-export const embedKey = decodeOrEmpty(parsed?.[2]);
-export const isConfigured = widgetOrigin !== '' && embedKey !== '';
-
-export const isMalformed = widgetUrl.trim() !== '' && !isConfigured;
-
-export const widgetUrlDisplay = widgetUrl.trim();
+export const isMalformed = widgetUrl !== '' && !isConfigured;
 
 /** Identity key secret (Mentiora admin: Embed → Identity keys). A real app keeps it on its
  *  server; `src/fake-backend.ts` stands in for one. Unset means Sign in is disabled. */

@@ -1,33 +1,32 @@
 /**
  * Random bytes from the page's WebCrypto, bounded at 2s. React Native has no
- * global WebCrypto, so the host injects a script calling `getRandomValues` in
- * the WebView; the bytes become the session key and the install id.
- * Replies are authenticated by a per-request nonce, not the module-constant
- * tag any frame can spell — chosen bytes mean a chosen session key. The nonce
- * ships inside the injected script, which runs in the main frame only.
+ * global WebCrypto, so a script calling `getRandomValues` is injected into the
+ * WebView; the bytes become the session key and the install id. Replies are
+ * authenticated by a per-request nonce, since any frame can spell the tag and
+ * chosen bytes mean a chosen session key. The script runs in the main frame only.
  */
 
 export type RandomSource = {
-  /** Exactly `count` cryptographically random bytes (callers ask for 16). One
-   *  request in flight: a second call while one is pending rejects. */
+  /** Exactly `count` cryptographically random bytes. A second call while one
+   *  is pending rejects. */
   bytes: (count: number) => Promise<Uint8Array>;
-  /** Called by the component's onMessage router BEFORE the JSON-RPC parser. */
+  /** Must run before the JSON-RPC parser in the onMessage router. */
   acceptReply: (raw: string) => boolean;
-  /** Invalidates the parked resolver at a load boundary; left pending, it
-   *  fails the replacement page's `initialize` `-32603` on "already in flight". */
+  /** Call at a load boundary, or the replacement page's `initialize` fails
+   *  with -32603 "already in flight". */
   reset: () => void;
 };
 
 export const RANDOM_REPLY_TAG = '__mentiora_random__';
 
 let nonceCounter = 0;
-/** Per-request, non-repeating, unpredictable from the page side. Not exported. */
+/** Must not repeat or be predictable from the page side. */
 const newNonce = (): string =>
   `${++nonceCounter}.${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 
 export type RandomDeps = {
   inject: (script: string) => void;
-  timeoutMs?: number; // default 2000
+  timeoutMs?: number;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
@@ -39,8 +38,8 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const clearTimer =
     deps.clearTimer ?? ((h: unknown) => clearTimeout(h as Parameters<typeof clearTimeout>[0]));
-  // ponytail: injected seam for a host polyfill, never sniffed from
-  // `globalThis` — Node's test runner has `crypto` and would skip the inject.
+  // ponytail: injected for a host polyfill. Not read from `globalThis`: Node's
+  // test runner has `crypto` and would skip the inject path.
   const globalCrypto = deps.globalCrypto;
 
   let pending: {
@@ -98,8 +97,8 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     if (obj.tag !== RANDOM_REPLY_TAG) return false;
 
     const current = pending;
-    // The nonce is the whole authentication; anything else — a stale reply
-    // included — falls through untouched to the JSON-RPC parser.
+    // The nonce is the only authentication; a mismatch, including a stale reply,
+    // falls through to the JSON-RPC parser.
     if (!current || obj.nonce !== current.nonce) return false;
 
     pending = null;

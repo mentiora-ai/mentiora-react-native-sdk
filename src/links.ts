@@ -1,9 +1,6 @@
 /**
- * Link routing, both directions fail closed. `isSameOrigin` gates same-WebView
- * navigation, which inherits the widget origin's session; `isAllowedExternal`
- * gates `Linking.openURL`, where a false accept hands `javascript:` or `file:`
- * to the OS. Never `new URL()` (RN's throws) or `originWhitelist` (a prefix
- * match, so `https://a.ai` accepts `https://a.ai.evil.com`).
+ * Both checks fail closed. Not `new URL()` (RN's throws) or `originWhitelist`
+ * (a prefix match: `https://a.ai` accepts `https://a.ai.evil.com`).
  */
 
 // The space is the \u0020 escape, not a literal, so no formatter eats it.
@@ -14,9 +11,8 @@ const SCHEME_RE = /^([a-zA-Z][a-zA-Z\d+\-.]*):/;
 
 const AUTHORITY_RE = /^(https?):\/\/([^/?#]+)/i;
 
-// `@` or `\` anywhere in the authority voids the match rather than truncating:
-// `https://a.ai@evil.com` is really `evil.com`, `\` is a WHATWG separator, and
-// truncating at either would read both as SAME origin.
+// `https://a.ai@evil.com` is really `evil.com`, and `\` is a WHATWG separator,
+// so either voids the match.
 const FORBIDDEN_IN_AUTHORITY = /[\\@]/;
 
 export const ALLOWED_SCHEMES = ['https:', 'mailto:', 'tel:'] as const;
@@ -44,10 +40,7 @@ export const originOf = (url: string): string | null => {
   return `${scheme}://${host}`;
 };
 
-/** Same document: `b` is `a` with only its fragment changed, and the TARGET
- *  must carry one (`#` alone counts). Missing a real navigation answers the
- *  new document's `initialize` -32600; calling `/chat` -> `/chat#t` a boundary
- *  drops a live session key and every page call takes -32001. Raw strings. */
+/** True when `b` is `a` with only its fragment changed; `b` must contain `#`. */
 export const isSameDocument = (a: string, b: string): boolean =>
   b.includes('#') && a.split('#')[0] === b.split('#')[0];
 

@@ -2,7 +2,9 @@
 // keeping one incident out of two of them. `advanceTimersByTimeAsync` only — the synchronous
 // form fires a timer's callback without draining the microtasks its own awaits sit on.
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import type React from 'react';
 import { StrictMode, Suspense } from 'react';
+import { Text } from 'react-native';
 import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
 import { RANDOM_REPLY_TAG } from '../random';
@@ -11,6 +13,7 @@ import { DEFAULT_STRINGS } from '../ui/strings';
 
 const ORIGIN = 'https://w.x.ai';
 const KEY = 'pk_wgt_a';
+const WIDGET_URL = `${ORIGIN}/h/rn/${KEY}`;
 
 beforeEach(() => {
   jest.useFakeTimers();
@@ -62,7 +65,7 @@ const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion =
   });
 
 const mount = async (onEvent?: jest.Mock) => {
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
   return screen.getByTestId('mentiora-webview');
 };
 
@@ -163,9 +166,7 @@ test('a network-ladder reload that never re-initializes still gets caught by the
 
 test('unmounting cancels the live watchdog — no reload, no error event, for a widget the host already closed', async () => {
   const onEvent = jest.fn();
-  const view = await render(
-    <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />,
-  );
+  const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
   // Captured before unmount: `__lastWebView()` would throw afterwards, this ref will not.
   const { reload } = __lastWebView();
   await view.unmount();
@@ -284,6 +285,53 @@ test('Dismiss emits close and stops rendering the WebView, with nothing else con
   expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
 });
 
+type ErrorRender = NonNullable<React.ComponentProps<typeof MentioraWidget>['renderError']>;
+
+// Captures the props the host's screen was last rendered with.
+const hostErrorScreen = () => {
+  const last: { props?: Parameters<ErrorRender>[0] } = {};
+  const renderError: ErrorRender = (props) => {
+    last.props = props;
+    return <Text testID="host-error">{props.code}</Text>;
+  };
+  return { renderError, last };
+};
+
+const failThreeLoads = async (el: ReturnType<typeof screen.getByTestId>) => {
+  for (let i = 0; i < 3; i++) {
+    await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
+    await advance(9000);
+  }
+};
+
+test('renderError replaces the built-in surface and still reports the error', async () => {
+  const onEvent = jest.fn();
+  const { renderError } = hostErrorScreen();
+  await render(
+    <MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} renderError={renderError} />,
+  );
+  await failThreeLoads(screen.getByTestId('mentiora-webview'));
+  expect(screen.getByTestId('host-error').props.children).toBe('load_failed');
+  expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'load_failed' });
+});
+
+test("renderError's retry reloads and its dismiss closes, like the built-in buttons", async () => {
+  const onEvent = jest.fn();
+  const { renderError, last } = hostErrorScreen();
+  await render(
+    <MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} renderError={renderError} />,
+  );
+  await failThreeLoads(screen.getByTestId('mentiora-webview'));
+  await act(async () => last.props?.retry());
+  expect(screen.queryByTestId('host-error')).toBeNull();
+
+  await failThreeLoads(screen.getByTestId('mentiora-webview'));
+  await act(async () => last.props?.dismiss());
+  expect(onEvent).toHaveBeenCalledWith({ type: 'close' });
+  expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
+});
+
 // `clearWatchdogTimer()` disarms before the handler can fail, so the catch must re-arm: without
 // it a rejecting handler leaves the widget dead — no surface, no event, no Retry.
 test('an initialize handler that rejects ends at the error surface, not a dead widget', async () => {
@@ -300,8 +348,7 @@ test('an initialize handler that rejects ends at the error surface, not a dead w
   };
   await render(
     <MentioraWidget
-      widgetOrigin={ORIGIN}
-      embedKey={KEY}
+      widgetUrl={WIDGET_URL}
       onEvent={onEvent}
       storage={storage}
       identity={{ getToken: () => Promise.reject(new Error('token endpoint down')) }}
@@ -405,7 +452,7 @@ test('a render that never commits leaves no watchdog behind', async () => {
   const { Suspends, release } = suspendOnce();
   await render(
     <Suspense fallback={null}>
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />
+      <MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />
       <Suspends />
     </Suspense>,
   );
@@ -423,7 +470,7 @@ test("the 8s floor survives StrictMode's simulated unmount", async () => {
   const onEvent = jest.fn();
   await render(
     <StrictMode>
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />
+      <MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />
     </StrictMode>,
   );
   await advance(20000);
@@ -439,7 +486,7 @@ function Mounted({
   show: boolean;
   onEvent: jest.Mock;
 }): React.JSX.Element | null {
-  return show ? <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} /> : null;
+  return show ? <MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} /> : null;
 }
 
 // Clearing only the timers that exist at unmount lets an `initialize` still parked on a
@@ -477,9 +524,7 @@ test('a signed-in install with no identity says so in dev, and names logout', as
         store.delete(k);
       },
     };
-    const view = await render(
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} storage={storage} />,
-    );
+    const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} storage={storage} />);
     await initialize(view.getByTestId('mentiora-webview'));
     await advance(0);
 

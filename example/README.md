@@ -47,10 +47,9 @@ cp example/.env.example example/.env.local
 EXPO_PUBLIC_MENTIORA_WIDGET_URL=https://widget.acme.mentiora.ai/h/rn/pk_wgt_a1b2c3d4e5f6
 ```
 
-`src/config.ts` splits that on `/h/rn/` into the `widgetOrigin` and `embedKey` props the
-SDK actually takes — the parse is the exact inverse of the URL `MentioraWidget` builds,
-so it is not guessing at a format. Set but unparseable gets its own setup screen, distinct
-from not set at all.
+The SDK takes that URL as `widgetUrl` unchanged. `src/config.ts` only checks its shape, so a
+value that is set but malformed gets its own setup screen, distinct from not set at all,
+rather than an exception from `Mentiora.configure()`.
 
 ### Signing in
 

@@ -1,3 +1,4 @@
+import type React from 'react';
 import type { MentioraStrings } from './ui/strings.js';
 
 export type { MentioraStrings };
@@ -34,6 +35,15 @@ export type MentioraEvent =
    *  Emitted once per embed key. */
   | { type: 'storageUnavailable'; reason: StorageUnavailableReason };
 
+/** What `renderError` receives: the same actions the built-in Retry and Dismiss run. */
+export type MentioraErrorRenderProps = {
+  code: MentioraErrorCode;
+  /** A fresh load of the page. */
+  retry: () => void;
+  /** Stops showing the widget and emits `close`, which closes the `Mentiora.open()` overlay. */
+  dismiss: () => void;
+};
+
 /** Overrides the AsyncStorage default used to persist the install id. */
 export interface MentioraStorage {
   getItem: (key: string) => Promise<string | null>;
@@ -42,10 +52,12 @@ export interface MentioraStorage {
 }
 
 export interface MentioraConfig {
-  /** Per tenant, e.g. https://widget.acme.mentiora.ai. */
-  widgetOrigin: string;
-  /** `pk_wgt_…`. The SDK loads `${widgetOrigin}/h/rn/${embedKey}`. */
-  embedKey: string;
+  /**
+   * The hosted-page URL from the Mentiora install snippet, e.g.
+   * `https://widget.acme.mentiora.ai/h/rn/pk_wgt_…`. Anything else throws, from
+   * `Mentiora.configure()` or on the widget's first render.
+   */
+  widgetUrl: string;
   /** Omitted means anonymous chat. */
   identity?: MentioraIdentity;
   onEvent?: (event: MentioraEvent) => void;
@@ -54,6 +66,12 @@ export interface MentioraConfig {
   storage?: MentioraStorage;
   /** Overrides the error screen's copy; an `undefined` key keeps its default. */
   strings?: Partial<MentioraStrings>;
+  /**
+   * Replaces the built-in error screen, e.g. to match the app's own design. It fills the
+   * widget's area, so it must offer a way out: without `dismiss` the user is stuck on it.
+   * `strings` does not apply to it. `onEvent` still reports the `error`.
+   */
+  renderError?: (props: MentioraErrorRenderProps) => React.ReactNode;
 }
 
 export type MentioraWidgetProps = MentioraConfig & {

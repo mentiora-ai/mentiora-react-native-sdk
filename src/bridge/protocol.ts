@@ -29,13 +29,14 @@ export const Method = {
   backHandling: 'mentiora/backHandling',
   back: 'mentiora/back',
   /**
-   * Host -> page, v1.1. Sent when a warm page is shown again without a reload, because
-   * the page's own launch signal fires once per document: without it the second and
-   * every later open is invisible to the widget's dwell and open/close funnel. A page
-   * that predates it drops the notification, which is why this is additive and needs no
-   * version bump.
+   * Host -> page, v1.1. `show` and `hide` report the warm overlay's visibility to the
+   * page's open/close signals: the page's own launch signal fires once per document, and
+   * a park through back or `close()` never reaches it. `InitializeResult.visible` covers
+   * a document that loads while parked. A page that predates them drops both
+   * notifications, which is why they are additive and need no version bump.
    */
   show: 'mentiora/show',
+  hide: 'mentiora/hide',
 } as const;
 
 export type Method = (typeof Method)[keyof typeof Method];

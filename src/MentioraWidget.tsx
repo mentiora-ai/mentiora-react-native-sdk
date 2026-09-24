@@ -20,6 +20,7 @@ import { getRuntime, type MentioraRuntime } from './runtime.js';
 import type { MentioraErrorCode, MentioraWidgetProps } from './types.js';
 import { ErrorScreen } from './ui/ErrorScreen.js';
 import { SDK_NAME, SDK_VERSION } from './version.js';
+import { parseWidgetUrl } from './widget-url.js';
 
 const SESSION_KEY_BYTES = 16;
 
@@ -210,6 +211,9 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
               installId,
               identityToken,
               sdk: { name: SDK_NAME, version: SDK_VERSION },
+              // Read after the awaits: a `show`/`hide` sent during them is dropped, since
+              // the peer assigns the session key only once this resolves.
+              visible: latest.current.props.visible ?? true,
             };
           } catch (e) {
             // Re-arm: `onLoadEnd` will not fire again, so without this a
@@ -480,6 +484,8 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     if (!visible) {
       // Whatever route the page had open belongs to a screen nobody is looking at.
       backHeld.current = false;
+      // Back and `close()` bypass the page's own close button, so it must be told.
+      peer.sendHide();
       return;
     }
     // A session that ended on the error screen or a dismissal has no usable document
@@ -531,7 +537,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
 
   const onShouldStartLoadWithRequest = (request: NavigationRequest): boolean => {
     const { url, isTopFrame, navigationType } = request;
-    if (isSameOrigin(url, latest.current.props.widgetOrigin)) {
+    if (isSameOrigin(url, parseWidgetUrl(latest.current.props.widgetUrl).origin)) {
       // Not `onLoadStart`: Android raises it from `doUpdateVisitedHistory`, so
       // resetting there kills the session key mid-document (`-32001`).
       if (isTopFrame) {
@@ -566,7 +572,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         style={styles.webview}
         // Fixed per instance: Android does not raise `onShouldStartLoadWithRequest`
         // for a `source` change, so `key` the component to change either prop.
-        source={{ uri: `${props.widgetOrigin}/h/rn/${encodeURIComponent(props.embedKey)}` }}
+        source={{ uri: parseWidgetUrl(props.widgetUrl).url }}
         onMessage={onMessage}
         originWhitelist={ALL_ORIGINS}
         onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
@@ -588,12 +594,16 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       {errorCode !== null && (
         // iOS counterpart of `importantForAccessibility` above.
         <View style={StyleSheet.absoluteFill} accessibilityViewIsModal={true}>
-          <ErrorScreen
-            strings={props.strings}
-            code={errorCode}
-            onRetry={restartLoad}
-            onDismiss={onDismiss}
-          />
+          {props.renderError ? (
+            props.renderError({ code: errorCode, retry: restartLoad, dismiss: onDismiss })
+          ) : (
+            <ErrorScreen
+              strings={props.strings}
+              code={errorCode}
+              onRetry={restartLoad}
+              onDismiss={onDismiss}
+            />
+          )}
         </View>
       )}
     </View>

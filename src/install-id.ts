@@ -1,6 +1,5 @@
-/** The anonymous user's identity: the widget's server mints a user keyed to it
- *  and every thread hangs off it. Per `embedKey`, so two embedded widgets never
- *  share one anonymous user. */
+/** The anonymous user's identity: the server keys the user and their threads
+ *  to it. Stored per `embedKey`. */
 
 import { toBase64Url } from './random.js';
 import type { MentioraStorage } from './types.js';

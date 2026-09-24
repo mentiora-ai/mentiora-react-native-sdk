@@ -14,7 +14,8 @@ import { DEFAULT_STRINGS } from '../ui/strings';
 
 const ORIGIN = 'https://w.x.ai';
 const KEY = 'pk_wgt_a';
-const cfg = { widgetOrigin: ORIGIN, embedKey: KEY };
+const WIDGET_URL = `${ORIGIN}/h/rn/${KEY}`;
+const cfg = { widgetUrl: WIDGET_URL };
 
 beforeEach(() => {
   __resetRuntimes();
@@ -155,6 +156,11 @@ test('open works with no widget mounted anywhere — that is the whole point', a
   expect(screen.getByTestId('mentiora-webview')).toBeTruthy();
 });
 
+test('configure with a malformed widgetUrl throws at startup, naming the expected shape', () => {
+  // An origin without the `/h/rn/<key>` path is the likely mistake after the rename.
+  expect(() => Mentiora.configure({ widgetUrl: ORIGIN })).toThrow(/widgetUrl.*\/h\/rn\//);
+});
+
 test('open before configure throws a clear error naming the missing call', async () => {
   await expect(Mentiora.open()).rejects.toThrow(/configure/);
 });
@@ -270,6 +276,60 @@ test('a warm show tells the page it is on screen again', async () => {
     await Mentiora.open();
   });
   expect(sent().slice(before).at(-1)).toMatchObject({ method: 'mentiora/show' });
+});
+
+test('parking tells the page it left the screen', async () => {
+  // Back and `close()` park the overlay without the page's own close button, so without
+  // this the page's open never ends and its dwell keeps growing.
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  await handshake(screen.getByTestId('mentiora-webview'));
+  const before = sent().length;
+  await act(async () => {
+    Mentiora.close();
+  });
+  expect(sent().slice(before)).toEqual([
+    { jsonrpc: '2.0', method: 'mentiora/hide', params: { sessionKey: currentSessionKey() } },
+  ]);
+});
+
+test('the handshake tells the page whether it is on screen', async () => {
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  await handshake(screen.getByTestId('mentiora-webview'));
+  await waitFor(() => {
+    expect(sent().at(-1)).toMatchObject({ result: { visible: true } });
+  });
+});
+
+test('a document loaded while parked is told it is off screen', async () => {
+  // An identity change reloads the parked overlay. Told nothing, the new document counts
+  // an open on `ready` that nobody saw.
+  Mentiora.configure(cfg);
+  await render(<MentioraHost />);
+  await act(async () => {
+    await Mentiora.open();
+  });
+  const first = __lastWebView();
+  await handshake(screen.getByTestId('mentiora-webview'));
+  await act(async () => {
+    Mentiora.close();
+  });
+  await act(async () => {
+    Mentiora.configure({ ...cfg, identity: { getToken: () => 't1' } });
+  });
+  expect(__lastWebView()).not.toBe(first);
+  // Parked, the overlay is hidden from screen readers and so from RNTL's default query.
+  await handshake(screen.getByTestId('mentiora-webview', { includeHiddenElements: true }));
+  await waitFor(() => {
+    expect(sent().at(-1)).toMatchObject({ result: { visible: false } });
+  });
 });
 
 test('configure with a NEW identity reloads the warm page; an unchanged one does not', async () => {

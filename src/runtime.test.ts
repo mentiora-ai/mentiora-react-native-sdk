@@ -10,8 +10,7 @@ import { __resetRuntimes, getRuntime } from './runtime.js';
 const cfg = (embedKey: string) => {
   const store = new Map<string, string>();
   return {
-    widgetOrigin: 'https://w.x.ai',
-    embedKey,
+    widgetUrl: `https://w.x.ai/h/rn/${encodeURIComponent(embedKey)}`,
     storage: {
       getItem: async (k: string) => store.get(k) ?? null,
       setItem: async (k: string, v: string) => {

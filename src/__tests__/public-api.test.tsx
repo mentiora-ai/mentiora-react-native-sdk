@@ -7,9 +7,7 @@ import * as sdk from '../index';
 // A stub is a function too, so the surface has to be called, not type-checked.
 test('the stubs are gone: the surface no longer throws "not implemented"', () => {
   expect(() => sdk.Mentiora.close()).not.toThrow();
-  expect(() =>
-    sdk.Mentiora.configure({ widgetOrigin: 'https://w.x.ai', embedKey: 'pk_wgt_a' }),
-  ).not.toThrow();
+  expect(() => sdk.Mentiora.configure({ widgetUrl: 'https://w.x.ai/h/rn/pk_wgt_a' })).not.toThrow();
 });
 
 test('SDK_VERSION matches package.json — release.yml aborts if it does not', () => {

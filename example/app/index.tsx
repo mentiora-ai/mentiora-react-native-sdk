@@ -4,15 +4,7 @@ import type React from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  canSignIn,
-  embedKey,
-  identityFetcher,
-  isConfigured,
-  setCredentials,
-  widgetOrigin,
-  widgetUrlDisplay,
-} from '../src/config';
+import { canSignIn, identityFetcher, isConfigured, setCredentials, widgetUrl } from '../src/config';
 import { EventLog } from '../src/EventLog';
 import { note, record } from '../src/event-log';
 import {
@@ -27,8 +19,7 @@ import {
  *  compares `identity` by reference and drops its cached token on change. */
 const configure = (identity: typeof identityFetcher | undefined): void => {
   Mentiora.configure({
-    widgetOrigin,
-    embedKey,
+    widgetUrl,
     identity,
     onEvent: (event) => {
       record(event);
@@ -64,7 +55,8 @@ export default function HomeScreen(): React.JSX.Element {
     if (!isConfigured || !claimLaunch()) return;
     configure(undefined);
     void present().catch((error: unknown) => {
-      record({ type: 'identityError', reason: `open: ${String(error)}` });
+      // A plain line: an SDK `identityError` would send a failed `open()` down the wrong trail.
+      note(`open failed: ${String(error)}`);
     });
   }, []);
 
@@ -73,7 +65,7 @@ export default function HomeScreen(): React.JSX.Element {
     try {
       await action();
     } catch (error) {
-      record({ type: 'identityError', reason: `${label}: ${String(error)}` });
+      note(`${label} failed: ${String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -116,7 +108,7 @@ export default function HomeScreen(): React.JSX.Element {
         </Text>
 
         <View style={styles.card}>
-          <Row label="widget" value={widgetUrlDisplay} />
+          <Row label="widget" value={widgetUrl} />
           <Row label="principal" value={principal} testID="principal" />
         </View>
 

@@ -7,6 +7,7 @@ import { createIdentityProvider, type IdentityProvider, type LogoutEpoch } from 
 import { loadOrCreateInstallId, rotateInstallId } from './install-id.js';
 import { resolveStorage, type StorageStatus } from './storage.js';
 import type { MentioraConfig, MentioraIdentity, MentioraStorage } from './types.js';
+import { parseWidgetUrl } from './widget-url.js';
 
 /** 16 random bytes, from the WebView that is asking. */
 export type RandomBytes = (n: number) => Promise<Uint8Array>;
@@ -44,8 +45,7 @@ export const __resetRuntimes = (): void => {
   runtimes.clear();
 };
 
-const buildEntry = (config: MentioraConfig): RuntimeEntry => {
-  const { embedKey } = config;
+const buildEntry = (config: MentioraConfig, embedKey: string): RuntimeEntry => {
   const epoch: LogoutEpoch = { n: 0 };
   const resolved = resolveStorage(config.storage);
   const { storage } = resolved;
@@ -132,7 +132,8 @@ const buildEntry = (config: MentioraConfig): RuntimeEntry => {
  *  fresh provider without clearing the old one, which would drop `wasSignedIn`.
  *  Only `identity` is reconciled; a new `config.storage` would strand the id. */
 export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
-  const existing = runtimes.get(config.embedKey);
+  const { embedKey } = parseWidgetUrl(config.widgetUrl);
+  const existing = runtimes.get(embedKey);
   if (existing) {
     if (existing.identityRef !== config.identity) {
       existing.runtime.identity = createIdentityProvider({
@@ -145,7 +146,7 @@ export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
     }
     return existing.runtime;
   }
-  const entry = buildEntry(config);
-  runtimes.set(config.embedKey, entry);
+  const entry = buildEntry(config, embedKey);
+  runtimes.set(embedKey, entry);
   return entry.runtime;
 };

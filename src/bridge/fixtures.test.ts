@@ -25,6 +25,7 @@ const stubHandlers = (sessionKey: string): HostHandlers => ({
     sessionKey,
     installId: '0123456789abcdef0123456789abcdef',
     sdk: { name: '@mentiora/react-native-sdk', version: '0.0.1' },
+    visible: true,
   }),
   refreshIdentity: async () => ({ identityToken: 'eyJhbGciOiJIUzI1NiJ9.x.y' }),
   openUrl: async () => {},
@@ -55,7 +56,13 @@ test('host fixture: a second initialize on one load gets the complete -32600 env
   assert.deepEqual(JSON.parse(sent[sent.length - 1] as string), fx.steps[1].message);
 });
 
-for (const name of ['handshake', 'identity-refresh', 'back-handling', 'unknown-method']) {
+for (const name of [
+  'handshake',
+  'identity-refresh',
+  'back-handling',
+  'unknown-method',
+  'visibility',
+]) {
   test(`page fixture ${name}: every page->host step routes without error`, async () => {
     const fx = fixture(name);
     assert.equal(fx.role, 'page');

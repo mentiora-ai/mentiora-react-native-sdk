@@ -14,6 +14,7 @@ import { SDK_NAME, SDK_VERSION } from '../version';
 
 const ORIGIN = 'https://w.x.ai';
 const KEY = 'pk_wgt_a';
+const WIDGET_URL = `${ORIGIN}/h/rn/${KEY}`;
 
 const openURL = Linking.openURL as jest.Mock;
 
@@ -75,7 +76,7 @@ const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion =
   });
 
 const mount = async () => {
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />);
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} />);
   return screen.getByTestId('mentiora-webview');
 };
 
@@ -106,7 +107,6 @@ test('answers initialize with OUR protocol version and a session key', async () 
   expect(typeof reply.result?.sessionKey).toBe('string');
   expect((reply.result?.sessionKey as string | undefined)?.length ?? 0).toBeGreaterThan(0);
   expect(typeof reply.result?.installId).toBe('string');
-  // The generated constants, not a literal: this pins that the descriptor is reported at all.
   expect(reply.result?.sdk).toEqual({ name: SDK_NAME, version: SDK_VERSION });
 });
 
@@ -421,7 +421,7 @@ test('a mailto link opens via Linking; a javascript: link is refused with -32003
 
 test('onOpenUrl returning true takes over and the page is answered success', async () => {
   const onOpenUrl = jest.fn(() => true);
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onOpenUrl={onOpenUrl} />);
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} onOpenUrl={onOpenUrl} />);
   const el = screen.getByTestId('mentiora-webview');
   await initialize(el);
   await waitForSent(1);
@@ -444,7 +444,7 @@ test('onOpenUrl returning true takes over and the page is answered success', asy
 
 test('page notifications surface through onEvent', async () => {
   const onEvent = jest.fn();
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
   const el = screen.getByTestId('mentiora-webview');
   await initialize(el);
   await waitForSent(1);
@@ -484,12 +484,10 @@ test('refreshIdentity with no identity configured answers -32002, not -32603', a
 
 test('the identity provider is read live, so a reconfigure is not ignored', async () => {
   const first = { getToken: () => 'token-one' };
-  const view = await render(
-    <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} identity={first} />,
-  );
+  const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} identity={first} />);
   // Same embedKey, new `identity` reference: getRuntime swaps the provider in place.
   const second = { getToken: () => 'token-two' };
-  await view.rerender(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} identity={second} />);
+  await view.rerender(<MentioraWidget widgetUrl={WIDGET_URL} identity={second} />);
   const el = screen.getByTestId('mentiora-webview');
   await initialize(el);
   await waitForSent(1);
@@ -499,8 +497,8 @@ test('the identity provider is read live, so a reconfigure is not ignored', asyn
 test('two widgets on one embed key share a runtime and mint ONE install id', async () => {
   await render(
     <>
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />
+      <MentioraWidget widgetUrl={WIDGET_URL} />
+      <MentioraWidget widgetUrl={WIDGET_URL} />
     </>,
   );
   const els = screen.getAllByTestId('mentiora-webview');
@@ -520,10 +518,9 @@ test('two widgets on one embed key share a runtime and mint ONE install id', asy
   expect(new Set(ids).size).toBe(1);
 });
 
-// Degraded storage owes both a `__DEV__` warning and an `onEvent`, and only the
-// composition root reads the flag. Built by hand: `jest.setup.ts` mocks the peer suite-wide.
+// Built by hand because `jest.setup.ts` mocks the peer suite-wide.
 const degradeStorage = (reason: 'peer-absent' | 'no-require' = 'peer-absent') => {
-  const rt = getRuntime({ widgetOrigin: ORIGIN, embedKey: KEY });
+  const rt = getRuntime({ widgetUrl: WIDGET_URL });
   rt.storage = { ephemeral: true, reason, detail: 'no peer here' };
   return jest.spyOn(console, 'warn').mockImplementation(() => {});
 };
@@ -532,9 +529,8 @@ test('degraded storage is reported through onEvent, not only to a stripped __DEV
   const warn = degradeStorage();
   const onEvent = jest.fn();
   try {
-    await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+    await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
     expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'peer-absent' });
-    // The warning too: the event alone leaves no console trace of vanishing threads.
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('peer-absent'));
   } finally {
     warn.mockRestore();
@@ -547,7 +543,7 @@ test('the reason travels with the event — the three fallbacks need different f
   const warn = degradeStorage('no-require');
   const onEvent = jest.fn();
   try {
-    await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+    await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
     expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'no-require' });
   } finally {
     warn.mockRestore();
@@ -556,7 +552,7 @@ test('the reason travels with the event — the three fallbacks need different f
 
 test('working storage says nothing at all', async () => {
   const onEvent = jest.fn();
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
   expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'storageUnavailable' }));
 });
 
@@ -565,11 +561,9 @@ test('one degraded store is reported once per embed key, not once per presentati
   const warn = degradeStorage();
   const onEvent = jest.fn();
   try {
-    const first = await render(
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />,
-    );
+    const first = await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
     await first.unmount();
-    await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} onEvent={onEvent} />);
+    await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
     expect(
       onEvent.mock.calls.filter(([e]) => (e as { type: string }).type === 'storageUnavailable'),
     ).toHaveLength(1);
@@ -578,10 +572,10 @@ test('one degraded store is reported once per embed key, not once per presentati
   }
 });
 
-// `embedKey` is customer input in a URL path segment: unencoded, a `/` or `?` in it
-// loads a different path instead of the widget.
-test('embedKey is percent-encoded into its one path segment', async () => {
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey="pk wgt/../x?y#z" />);
+// The key is customer input in a URL path segment: decoded into the loaded URL, a `/` or
+// `?` in it would load a different path instead of the widget.
+test('an encoded key stays percent-encoded in its one path segment', async () => {
+  await render(<MentioraWidget widgetUrl={`${ORIGIN}/h/rn/pk%20wgt%2F..%2Fx%3Fy%23z`} />);
   expect(screen.getByTestId('mentiora-webview').props.source).toEqual({
     uri: `${ORIGIN}/h/rn/pk%20wgt%2F..%2Fx%3Fy%23z`,
   });

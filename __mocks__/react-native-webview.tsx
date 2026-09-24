@@ -1,8 +1,6 @@
-// react-native-webview ships no Jest mock; every component test targets this one. It must
-// stay at the repo root in `__mocks__/`: Jest auto-mocks a node module only from there, and
-// `src/__mocks__` is silently ignored while the real WebView renders. Callbacks are forwarded
-// onto the View so RNTL's `fireEvent(el, '<name>')` finds `on${Name}`; the ref methods are
-// also on `__webViews`, since a test cannot reach the widget's own ref.
+// Must stay in the root `__mocks__/`: Jest auto-mocks node modules only from there.
+// Callbacks are forwarded onto the View so `fireEvent(el, '<name>')` finds them; ref
+// methods are also exposed on `__webViews`, since a test cannot reach the widget's ref.
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import type { ViewProps } from 'react-native';
 import { View } from 'react-native';
@@ -10,9 +8,8 @@ import { View } from 'react-native';
 type WebViewEvent = { nativeEvent: Record<string, unknown> };
 type WebViewEventHandler = (event: WebViewEvent) => void;
 
-// Unwrapped, unlike the other eight callbacks: `url` and `isTopFrame` arrive at the top
-// level (WebViewTypes.d.ts:172, :62). Wrapping it would teach the component to read
-// `event.nativeEvent.url`, undefined in production, denying every navigation.
+// Unwrapped, unlike the other callbacks: the real WebView passes `url` and `isTopFrame`
+// at the top level. Reading `event.nativeEvent.url` is undefined in production.
 type ShouldStartLoadRequest = { url: string; isTopFrame: boolean; navigationType?: string };
 
 export type MockWebViewProps = ViewProps & {

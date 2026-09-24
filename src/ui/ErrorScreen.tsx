@@ -1,5 +1,5 @@
 import type React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import type { MentioraErrorCode } from '../types.js';
 import { DEFAULT_STRINGS, type MentioraStrings } from './strings.js';
 
@@ -10,51 +10,58 @@ export type ErrorScreenProps = {
   onDismiss: () => void;
 };
 
-/** Covers a dead WebView. The hosted page draws its own chrome, so Dismiss is
- *  the only way out of the customer's app. `code` is not shown — all three
- *  values render the same `errorBody`; it reaches the host via `onEvent`. */
+/** Covers a dead WebView. Dismiss is the only way out, since the page draws its
+ *  own chrome. `code` is not displayed. */
 export function ErrorScreen(props: ErrorScreenProps): React.JSX.Element {
   const { strings, onRetry, onDismiss } = props;
-  // Not a spread: an explicit `undefined` would blank a control's label on the
-  // one screen whose only exit must stay visible.
+  // Not a spread: an explicit `undefined` would blank a label.
   const s = { ...DEFAULT_STRINGS };
   for (const key of Object.keys(DEFAULT_STRINGS) as (keyof MentioraStrings)[]) {
     const value = strings?.[key];
     if (value !== undefined) s[key] = value;
   }
 
+  // Follows the system scheme so a dark app is not flashed white; hosts wanting their own
+  // design use `renderError`.
+  const palette = useColorScheme() === 'dark' ? DARK : LIGHT;
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>{s.errorTitle}</Text>
-      <Text style={styles.body}>{s.errorBody}</Text>
+    <View
+      testID="mentiora-error"
+      style={[styles.container, { backgroundColor: palette.background }]}
+    >
+      <Text style={[styles.title, { color: palette.text }]}>{s.errorTitle}</Text>
+      <Text style={[styles.body, { color: palette.text }]}>{s.errorBody}</Text>
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={s.retry}
-          style={styles.button}
+          style={[styles.button, { backgroundColor: palette.button }]}
           onPress={onRetry}
         >
-          <Text style={styles.buttonText}>{s.retry}</Text>
+          <Text style={[styles.buttonText, { color: palette.text }]}>{s.retry}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={s.dismiss}
-          style={styles.button}
+          style={[styles.button, { backgroundColor: palette.button }]}
           onPress={onDismiss}
         >
-          <Text style={styles.buttonText}>{s.dismiss}</Text>
+          <Text style={[styles.buttonText, { color: palette.text }]}>{s.dismiss}</Text>
         </Pressable>
       </View>
     </View>
   );
 }
 
+const LIGHT = { background: '#ffffff', text: '#000000', button: '#f0f0f0' };
+const DARK = { background: '#000000', text: '#ffffff', button: '#2c2c2e' };
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#ffffff',
     padding: 24,
   },
   title: {
@@ -79,7 +86,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 8,
-    backgroundColor: '#f0f0f0',
   },
   buttonText: {
     fontSize: 15,

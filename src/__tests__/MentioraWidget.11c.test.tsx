@@ -12,10 +12,9 @@ import {
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
 
-// `react-native-safe-area-context` is an uninstalled optional peer; this virtual mock
-// is how the file defaults to "present", the only path injecting `--mw-host-inset-*` on
-// Jest's iOS platform. The value is inlined: `jest.mock` factories hoist above every
-// statement, including a `const` right above them, and may only name `mock*` identifiers.
+// Virtual mock of the uninstalled optional peer, the only path injecting `--mw-host-inset-*`
+// on Jest's iOS platform. Values are inlined because `jest.mock` factories hoist above every
+// statement and may only name `mock*` identifiers.
 jest.mock(
   'react-native-safe-area-context',
   () => ({ initialWindowMetrics: { insets: { top: 44, right: 1, bottom: 34, left: 2 } } }),
@@ -24,6 +23,7 @@ jest.mock(
 
 const ORIGIN = 'https://w.x.ai';
 const KEY = 'pk_wgt_a';
+const WIDGET_URL = `${ORIGIN}/h/rn/${KEY}`;
 
 beforeEach(() => {
   __resetRuntimes();
@@ -84,7 +84,7 @@ const pressBack = (): boolean => {
 };
 
 const mount = async () => {
-  await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />);
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} />);
   return screen.getByTestId('mentiora-webview');
 };
 
@@ -118,12 +118,12 @@ test('the BackHandler subscription is removed with .remove(), not removeEventLis
     .spyOn(BackHandler, 'addEventListener')
     .mockReturnValue({ remove } as unknown as ReturnType<typeof BackHandler.addEventListener>);
   try {
-    const view = await render(<MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />);
+    const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} />);
     expect(add).toHaveBeenCalledWith('hardwareBackPress', expect.any(Function));
     await view.unmount();
     expect(remove).toHaveBeenCalledTimes(1);
     // `removeEventListener` was deleted in RN 0.77 and throws if called.
-    expect((BackHandler as Record<string, unknown>).removeEventListener).toBeUndefined();
+    expect((BackHandler as unknown as Record<string, unknown>).removeEventListener).toBeUndefined();
   } finally {
     BackHandler.addEventListener = jest.fn(() => ({ remove: jest.fn() }));
   }
@@ -235,7 +235,6 @@ test('without the peer, Android falls back to StatusBar.currentHeight', () => {
 });
 
 test('with neither the peer nor Android, nothing is measurable — null, not a fabricated 0', () => {
-  // iOS with no peer injects nothing, and that must be an actual `null`, not a `0`.
   const realOS = Platform.OS;
   Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
   try {
@@ -289,9 +288,7 @@ test('a malformed peer measurement is rejected by loadSafeAreaInsets ITSELF, not
 test('a strings override on the public config reaches the rendered error screen', async () => {
   jest.useFakeTimers();
   try {
-    await render(
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} strings={{ retry: 'Try again' }} />,
-    );
+    await render(<MentioraWidget widgetUrl={WIDGET_URL} strings={{ retry: 'Try again' }} />);
     const el = screen.getByTestId('mentiora-webview');
     for (let i = 0; i < 3; i++) {
       await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
@@ -323,7 +320,7 @@ test('the back registration lands in the commit, not in the passive flush', asyn
   }
   await render(
     <>
-      <MentioraWidget widgetOrigin={ORIGIN} embedKey={KEY} />
+      <MentioraWidget widgetUrl={WIDGET_URL} />
       <Probe />
     </>,
   );

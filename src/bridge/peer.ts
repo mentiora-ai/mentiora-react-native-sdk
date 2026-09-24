@@ -20,7 +20,8 @@ export type InitializeResult = {
   installId: string;
   identityToken?: string;
   sdk: { name: string; version: string };
-  threadId?: string;
+  /** `false` when the document loads while parked, so the page counts no open on `ready`. */
+  visible: boolean;
 };
 
 export type HostHandlers = {
@@ -50,6 +51,8 @@ export type HostPeer = {
   sendBack: () => void;
   /** Tells a warm page it is on screen again; see `Method.show`. */
   sendShow: () => void;
+  /** Tells the page it left the screen; see `Method.show`. */
+  sendHide: () => void;
   resetLoad: () => void;
   sessionKey: () => string | null;
 };
@@ -241,15 +244,9 @@ export const createHostPeer = (deps: {
 
   // Guarded on the session key like `sendBack`: a page that has not handshaked has no
   // key to validate the notification against and would answer `-32001`.
-  const sendShow = (): void => {
+  const sendVisibility = (method: typeof Method.show | typeof Method.hide): void => {
     if (currentSessionKey === null) return;
-    send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: Method.show,
-        params: { sessionKey: currentSessionKey },
-      }),
-    );
+    send(JSON.stringify({ jsonrpc: '2.0', method, params: { sessionKey: currentSessionKey } }));
   };
 
   const resetLoad = (): void => {
@@ -258,5 +255,12 @@ export const createHostPeer = (deps: {
     currentSessionKey = null;
   };
 
-  return { receive, sendBack, sendShow, resetLoad, sessionKey: () => currentSessionKey };
+  return {
+    receive,
+    sendBack,
+    sendShow: () => sendVisibility(Method.show),
+    sendHide: () => sendVisibility(Method.hide),
+    resetLoad,
+    sessionKey: () => currentSessionKey,
+  };
 };

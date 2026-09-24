@@ -7,6 +7,7 @@ const result = {
   sessionKey: 'sk-test',
   installId: 'iid',
   sdk: { name: '@mentiora/react-native-sdk', version: '0.0.1' },
+  visible: true,
 };
 const makePeer = () => {
   const sent: string[] = [];
@@ -354,4 +355,19 @@ test('a page-sent response with the RIGHT session key is accepted in silence', a
     '{"jsonrpc":"2.0","id":"h2","error":{"code":-32601,"message":"Method not found"},"params":{"sessionKey":"sk-test"}}',
   );
   assert.equal(sent.length, before, 'a matching response is routed nowhere and answered nothing');
+});
+
+test('sendHide sends nothing before a handshake, then a keyed notification', async () => {
+  const { peer, sent } = makePeer();
+  peer.sendHide();
+  assert.equal(sent.length, 0, 'a keyless page would answer -32001');
+  await peer.receive(
+    '{"jsonrpc":"2.0","id":"r1","method":"mentiora/initialize","params":{"protocolVersion":1}}',
+  );
+  peer.sendHide();
+  assert.deepEqual(lastSent(sent), {
+    jsonrpc: '2.0',
+    method: 'mentiora/hide',
+    params: { sessionKey: 'sk-test' },
+  });
 });

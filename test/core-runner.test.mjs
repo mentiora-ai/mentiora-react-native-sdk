@@ -1,6 +1,6 @@
-// `run-core-tests.mjs` is all that stands between a tsconfig change that stops
-// emitting core tests and a green CI running a silent subset. The marker each
-// fixture leaves, not the exit code, proves it was executed rather than listed.
+// Guards `run-core-tests.mjs` against a tsconfig change that stops emitting core
+// tests while CI stays green. Each fixture leaves a marker, which proves it ran;
+// the exit code alone does not.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
