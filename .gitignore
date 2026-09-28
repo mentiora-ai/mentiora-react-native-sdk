@@ -9,6 +9,7 @@ coverage/
 .expo/
 dist/
 expo-env.d.ts
-.env*.local
+.env*
+!.env.example
 example/ios/
 example/android/
