@@ -21,7 +21,7 @@
           "protocolVersion": 1,
           "sessionKey": "sk-9f2a1b7e3d4c",
           "installId": "0123456789abcdef0123456789abcdef",
-          "sdk": { "name": "@mentiora-ai/react-native-sdk", "version": "0.1.0" },
+          "sdk": { "name": "@mentiora/react-native-sdk", "version": "0.1.0" },
           "visible": false
         },
         "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
