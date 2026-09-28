@@ -1,0 +1,23 @@
+{
+  "name": "open",
+  "protocolVersion": 1,
+  "role": "page",
+  "steps": [
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/open",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c", "threadId": "thr_aaaaaaaaaaaa" }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/open",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c", "threadId": "thr_zzzzzzzzzzzz" }
+      }
+    }
+  ]
+}

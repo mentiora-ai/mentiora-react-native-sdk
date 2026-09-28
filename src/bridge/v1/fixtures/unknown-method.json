@@ -1,0 +1,25 @@
+{
+  "name": "unknown-method",
+  "protocolVersion": 1,
+  "role": "page",
+  "steps": [
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "h2",
+        "method": "mentiora/doesNotExist",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    },
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "h2",
+        "error": { "code": -32601, "message": "Method not found" },
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    }
+  ]
+}

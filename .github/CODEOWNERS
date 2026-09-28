@@ -1,0 +1,3 @@
+# The whole tree is the published artifact or the pipeline that publishes it, so
+# one team owns all of it.
+*                             @mentiora-ai/app-dev

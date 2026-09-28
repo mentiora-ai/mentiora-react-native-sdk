@@ -1,0 +1,58 @@
+name: Security
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth 0: both scanners diff base..head, so they need both commits.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # --only-verified authenticates each candidate against its live provider, so
+      # fixtures never trip it. The action already passes --since-commit --branch
+      # --fail --no-update --github-actions; repeating any of them aborts trufflehog.
+      - name: TruffleHog (verified secrets only)
+        uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # v3.97.4
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --only-verified
+
+      # TruffleHog blocks only on credentials it can verify, so signing secrets and
+      # private keys pass it. Gitleaks matches on shape and covers that gap.
+      - name: Gitleaks
+        if: '!cancelled()'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git --config=/repo/.gitleaks.toml --redact --no-banner --no-color \
+            --log-opts="$BASE..$HEAD" 2>&1 | tee gitleaks.log
+
+          # gitleaks exits 0 after scanning nothing if it cannot read the repo, so
+          # a clean result counts only alongside a non-zero commit count. A range
+          # that only deletes lines legitimately scans 0 commits.
+          scanned=$(grep -oE '[0-9]+ commits scanned' gitleaks.log | grep -oE '^[0-9]+' | head -1 || true)
+          added=$(git log --numstat --format= "$BASE..$HEAD" | awk '{ if ($1 == "-") s += 1; else s += $1 } END { print s + 0 }')
+          if [ "${scanned:-0}" -eq 0 ] && [ "$added" -gt 0 ]; then
+            echo "::error::gitleaks scanned 0 commits between $BASE and $HEAD, but the range adds $added line(s)"
+            exit 1
+          fi
+          echo "gitleaks scanned ${scanned:-0} commit(s), no leaks."

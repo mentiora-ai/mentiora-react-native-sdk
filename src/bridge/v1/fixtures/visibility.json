@@ -1,0 +1,55 @@
+{
+  "name": "visibility",
+  "protocolVersion": 1,
+  "role": "page",
+  "steps": [
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r1",
+        "method": "mentiora/initialize",
+        "params": { "protocolVersion": 1 }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r1",
+        "result": {
+          "protocolVersion": 1,
+          "sessionKey": "sk-9f2a1b7e3d4c",
+          "installId": "0123456789abcdef0123456789abcdef",
+          "sdk": { "name": "@mentiora/react-native-sdk", "version": "0.1.0" },
+          "visible": false
+        },
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    },
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/ready",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/show",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/hide",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    }
+  ]
+}

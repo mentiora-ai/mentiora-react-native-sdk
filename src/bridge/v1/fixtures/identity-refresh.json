@@ -1,0 +1,27 @@
+{
+  "name": "identity-refresh",
+  "protocolVersion": 1,
+  "role": "page",
+  "steps": [
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r2",
+        "method": "mentiora/refreshIdentity",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r2",
+        "result": {
+          "identityToken": "eyJhbGciOiJIUzI1NiJ9.refreshed-token-body.signature"
+        },
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Mentiora Example",
+    "slug": "mentiora-example",
+    "scheme": "mentioraexample",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": ["expo-router", "expo-notifications"],
+    "ios": {
+      "bundleIdentifier": "ai.mentiora.example.dev"
+    },
+    "android": {
+      "package": "ai.mentiora.example.dev",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#FFFFFF"
+      }
+    },
+    "icon": "./assets/icon.png"
+  }
+}

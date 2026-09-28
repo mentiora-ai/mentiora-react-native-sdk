@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # `bun run test` shells out to `node --test` and pack uses npm; without
+      # this both run on the runner's ambient Node.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+      # The root tsconfig excludes `example/`.
+      - run: bun run typecheck:example
+      - run: bun run lint
+
+      - name: Fixtures unmodified
+        run: node scripts/check-fixtures.mjs
+
+      - run: bun run test
+      - run: bun run build
+
+      # The only check that resolves the SDK through Metro (example/metro.config.js).
+      - run: bun run bundle:example
+
+      - run: bunx publint --strict
+      - run: bunx attw --pack .
+
+      # Catches junk in the tarball, not compression. npm's `size` is the
+      # compressed length, so both are checked: ~120KB packed, ~640KB unpacked.
+      - name: Tarball size budget
+        run: |
+          npm pack --ignore-scripts --dry-run --json > /tmp/pack.json
+          SIZE=$(node -pe "require('/tmp/pack.json')[0].size")
+          UNPACKED=$(node -pe "require('/tmp/pack.json')[0].unpackedSize")
+          echo "tarball: $SIZE bytes compressed, $UNPACKED bytes unpacked"
+          [ "$SIZE" -lt 153600 ] || { echo "package exceeds the 150KB compressed budget"; exit 1; }
+          [ "$UNPACKED" -lt 819200 ] || { echo "package exceeds the 800KB unpacked budget"; exit 1; }
+
+  # Installs the packed tarball under npm at the peer floor. bun and npm hoist
+  # differently, so only this proves an npm consumer gets a working package.
+  consumer-install:
+    name: Consumer Install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: npm pack --ignore-scripts
+
+      - name: Install the tarball under npm at the peer floor
+        run: |
+          TARBALL="$PWD/$(ls mentiora-ai-react-native-sdk-*.tgz)"
+          mkdir -p /tmp/consumer && cd /tmp/consumer
+          npm init -y >/dev/null
+          # safe-area-context is deliberately absent: the optional-peer path is
+          # the one that breaks. check-public-types.ts needs @types/react for React.JSX.Element.
+          npm install --no-audit --no-fund \
+            "$TARBALL" \
+            react@18 \
+            react-native@0.76 \
+            react-native-webview@13.6.0 \
+            @react-native-async-storage/async-storage@1.23.1 \
+            @types/react@18 \
+            typescript@6.0.3
+
+      # Resolution cannot evaluate an RN entry (Flow source, SyntaxError under
+      # bare node), so only this walk catches a missing or eager peer import.
+      - name: Every eager import resolves from the consumer install
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/check-import-graph.mjs" \
+            /tmp/consumer/node_modules/@mentiora-ai/react-native-sdk/lib/module \
+            /tmp/consumer
+
+      - name: Resolve both entries and the public types
+        run: |
+          cd /tmp/consumer
+          # check-public-types.ts only exercises the ESM .d.ts; `attw --pack .` covers the CJS one.
+          node -e "const p=require.resolve('@mentiora-ai/react-native-sdk'); if(!/lib\/commonjs\/index\.js$/.test(p)) throw new Error('require resolved to '+p); console.log('cjs ok', p)"
+          node --input-type=module -e "const u = await import.meta.resolve('@mentiora-ai/react-native-sdk'); if(!/lib\/module\/index\.js$/.test(u)) throw new Error('import resolved to '+u); console.log('esm ok', u)"
+          cp "$GITHUB_WORKSPACE/scripts/check-public-types.ts" check.ts
+          npx tsc --noEmit --strict --moduleResolution bundler --module esnext --target esnext check.ts
+          echo "types ok"

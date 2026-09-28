@@ -1,0 +1,29 @@
+{
+  "name": "unauthorized-missing-session-key",
+  "protocolVersion": 1,
+  "role": "host",
+  "steps": [
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r3",
+        "method": "mentiora/openUrl",
+        "params": { "url": "https://example.com" }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "r3",
+        "error": {
+          "code": -32001,
+          "message": "Unauthorized",
+          "data": { "reason": "missing_session_key" }
+        },
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    }
+  ]
+}

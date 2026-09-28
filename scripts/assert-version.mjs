@@ -1,0 +1,42 @@
+// Release guard: nothing else ties the published version to the tag, the
+// changelog or the prerelease flag.
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+
+// The argument first: on a pull_request run GITHUB_REF_NAME is `<pr>/merge`.
+const ref = process.argv[2] ?? process.env.GITHUB_REF_NAME;
+if (!ref) {
+  throw new Error('no tag given: pass the tag as an argument or set GITHUB_REF_NAME');
+}
+
+const tagged = ref.replace(/^v/, '');
+if (tagged !== pkg.version) {
+  throw new Error(`tag ${ref} does not match package.json version ${pkg.version}`);
+}
+
+const version = readFileSync(join(root, 'src', 'version.ts'), 'utf8');
+if (!version.includes(`'${pkg.version}'`)) {
+  throw new Error('src/version.ts is stale — run "bun run gen:version" and commit it');
+}
+
+const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+const heading = new RegExp(`^## ${pkg.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
+if (!heading.test(changelog)) {
+  throw new Error(`CHANGELOG.md has no "## ${pkg.version}" section`);
+}
+
+// release.yml picks the dist-tag from this flag; disagree and a prerelease goes to latest.
+const isPrerelease = pkg.version.includes('-');
+const flagged = process.env.RELEASE_PRERELEASE === 'true';
+if (isPrerelease !== flagged) {
+  throw new Error(
+    `version ${pkg.version} ${isPrerelease ? 'is' : 'is not'} a prerelease, but the GitHub Release ` +
+      `${flagged ? 'is' : 'is not'} marked as one`,
+  );
+}
+
+console.log(`tag ${ref} matches package.json, src/version.ts and CHANGELOG.md`);

@@ -1,0 +1,31 @@
+{
+  "name": "back-handling",
+  "protocolVersion": 1,
+  "role": "page",
+  "steps": [
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/backHandling",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c", "active": true }
+      }
+    },
+    {
+      "direction": "host->page",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/back",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c" }
+      }
+    },
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/backHandling",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c", "active": false }
+      }
+    }
+  ]
+}

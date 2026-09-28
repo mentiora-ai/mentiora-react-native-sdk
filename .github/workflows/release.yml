@@ -1,0 +1,63 @@
+name: Release
+
+# Publishing a GitHub Release runs this; npm matches the trusted publisher on this
+# file's name, not the trigger, and can only be set up once the package exists, so
+# the first publish is manual: `npm publish --provenance=false` from a built `main`.
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # OIDC trusted publishing
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+
+      # A tag can point at any commit, including one that never passed review.
+      - name: Refuse a tag that is not on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD FETCH_HEAD \
+            || { echo "::error::${{ github.event.release.tag_name }} points at a commit that is not on main"; exit 1; }
+
+      - name: Assert the release is coherent
+        env:
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: node scripts/assert-version.mjs "${{ github.event.release.tag_name }}"
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
+      - run: bunx publint --strict
+      - run: bunx attw --pack .
+
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.
+      - run: npm install -g npm@latest
+
+      # Without an explicit dist-tag a prerelease would publish to latest.
+      - name: Publish
+        run: |
+          DIST_TAG=latest
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then DIST_TAG=next; fi
+          echo "publishing under dist-tag $DIST_TAG"
+          npm publish --ignore-scripts --tag "$DIST_TAG"
