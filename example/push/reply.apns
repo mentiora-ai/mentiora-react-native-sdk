@@ -1,0 +1,9 @@
+{
+  "Simulator Target Bundle": "ai.mentiora.example.dev",
+  "aps": {
+    "alert": { "title": "Mentiora", "body": "Test push: replace threadId below" },
+    "thread-id": "thr_replace_me"
+  },
+  "mentiora": "1",
+  "threadId": "thr_replace_me"
+}

@@ -1,17 +1,13 @@
 /**
- * Storage resolution for the install id. AsyncStorage is an optional peer; when
- * it cannot load, an in-memory `Map` flagged `ephemeral: true` is used, and
- * losing the install id orphans the anonymous user's threads. The ESM build has
- * no synchronous `require` and cannot load the peer; `reason` says which case.
+ * AsyncStorage is an optional peer; without it an in-memory `Map` is used, and losing
+ * the install id orphans the anonymous user's threads. The ESM build cannot load the peer.
  */
 import type { MentioraStorage, StorageUnavailableReason } from './types.js';
 
 export type { MentioraStorage, StorageUnavailableReason };
 
-/** The public reason plus the members for working storage. */
 export type StorageReason = 'override' | 'peer-loaded' | StorageUnavailableReason;
 
-/** Whether storage persists, and why. */
 export type StorageStatus =
   | { ephemeral: false; reason: 'override' | 'peer-loaded'; detail?: string }
   | { ephemeral: true; reason: StorageUnavailableReason; detail?: string };
@@ -28,7 +24,6 @@ class StorageLoadFailure extends Error {
   }
 }
 
-/** For classifying a load failure; the `require` call keeps its own literal. */
 const ASYNC_STORAGE = '@react-native-async-storage/async-storage';
 
 export const defaultLoad = (
@@ -47,8 +42,7 @@ export const defaultLoad = (
   try {
     return requireModule().default ?? null;
   } catch (err) {
-    // Only a MODULE_NOT_FOUND whose first line names the package is `peer-absent`;
-    // a transitive miss also lists it, in the Require stack.
+    // Only the first line: a transitive miss also names the package, in the Require stack.
     const message = err instanceof Error ? err.message : String(err);
     const code = (err as { code?: unknown } | null)?.code;
     const absent =
@@ -58,7 +52,7 @@ export const defaultLoad = (
 };
 
 const memoryStorage = (): MentioraStorage => {
-  // ponytail: plain Map with no eviction or TTL; it holds only a few keys.
+  // Plain Map with no eviction or TTL; it holds only a few keys.
   const m = new Map<string, string>();
   return {
     getItem: async (k) => m.get(k) ?? null,

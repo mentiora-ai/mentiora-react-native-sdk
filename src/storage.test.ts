@@ -89,8 +89,6 @@ test('two resolutions do not share one in-memory store', async () => {
   );
 });
 
-// The reason reaches the customer, so a peer that failed to initialise must not
-// be reported as absent.
 const moduleNotFound = (message: string): Error =>
   Object.assign(new Error(message), { code: 'MODULE_NOT_FOUND' });
 
@@ -151,9 +149,8 @@ test('a peer that loads is still used through the seam', () => {
   assert.equal(r.reason, 'peer-loaded');
 });
 
-// The only case that loads the real peer, so it catches an export-shape change the
-// injected `load`s cannot. No method is called: under `node --test` the peer resolves
-// to its web build, whose `getItem` throws on `window.localStorage`.
+// Loads the real peer without calling it: under `node --test` it resolves to the web
+// build, whose `getItem` throws on `window.localStorage`.
 test('the installed AsyncStorage peer still exports a default carrying the storage methods', () => {
   const loaded = defaultLoad();
   assert.ok(loaded, 'defaultLoad() returned null — the peer no longer exposes `.default`');

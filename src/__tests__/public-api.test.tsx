@@ -28,16 +28,24 @@ test('the internal test helpers are not reachable through the public entry', () 
   expect(Object.keys(sdk).some((k) => k.startsWith('__'))).toBe(false);
   const surface = sdk as unknown as Record<string, unknown>;
   expect(surface.__resetPresenter).toBeUndefined();
-  expect(surface.__resolveHostInsetsForTest).toBeUndefined();
+  expect(surface.resolveHostInsets).toBeUndefined();
   expect(surface.DEFAULT_STRINGS).toBeUndefined();
 });
 
-test('Mentiora carries exactly the four documented methods', () => {
-  expect(Object.keys(sdk.Mentiora).sort()).toEqual(['close', 'configure', 'logout', 'open'].sort());
+test('Mentiora carries exactly the documented methods', () => {
+  expect(Object.keys(sdk.Mentiora).sort()).toEqual(
+    [
+      'close',
+      'configure',
+      'getInstallRef',
+      'handleNotificationOpen',
+      'isMentioraPush',
+      'logout',
+      'open',
+    ].sort(),
+  );
 });
 
-// The public `reason` stays narrower than the internal `StorageReason`: `'override'`
-// and `'peer-loaded'` mean storage works, so they would be dead switch arms.
 test('storageUnavailable cannot carry a reason that means storage works', () => {
   const narrow: MentioraEvent = { type: 'storageUnavailable', reason: 'peer-absent' };
   // @ts-expect-error 'override' is not a StorageUnavailableReason

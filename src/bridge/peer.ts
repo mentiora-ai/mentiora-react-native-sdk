@@ -1,8 +1,6 @@
 /**
- * Host side of the JSON-RPC 2.0 bridge (protocol v1); the page sends every
- * request. `mentiora/initialize` is accepted once per page load without a
- * session key; every other message must carry `params.sessionKey` (-32001).
- * Id-less messages that fail are dropped. Every outbound message carries the key.
+ * Host side of the JSON-RPC bridge. `initialize` is accepted once per page load without
+ * a session key; every other message must carry `params.sessionKey` (-32001).
  */
 
 import {
@@ -10,6 +8,7 @@ import {
   isIdentityErrorParams,
   isInitializeParams,
   isOpenUrlParams,
+  isUnreadCountParams,
   parseInbound,
 } from './guards.js';
 import { ErrorCode, Method } from './protocol.js';
@@ -22,6 +21,7 @@ export type InitializeResult = {
   sdk: { name: string; version: string };
   /** `false` when the document loads while parked, so the page counts no open on `ready`. */
   visible: boolean;
+  threadId?: string;
 };
 
 export type HostHandlers = {
@@ -32,11 +32,11 @@ export type HostHandlers = {
   onClose: () => void;
   onIdentityError: (reason: string, message: string) => void;
   onBackHandling: (active: boolean) => void;
+  onUnreadCountChanged: (count: number) => void;
 };
 
-/** A handler error carrying its JSON-RPC code; other errors become -32603.
- *  `message` reaches the page verbatim, so it must be a fixed literal and never
- *  an upstream error's text, a URL or a token. */
+/** Other errors become -32603. `message` reaches the page verbatim, so it must be a
+ *  fixed literal: never upstream error text, a URL or a token. */
 export class BridgeError extends Error {
   readonly code: ErrorCode;
   constructor(code: ErrorCode, message: string) {
@@ -49,16 +49,13 @@ export class BridgeError extends Error {
 export type HostPeer = {
   receive: (raw: string) => Promise<void>;
   sendBack: () => void;
-  /** Tells a warm page it is on screen again; see `Method.show`. */
   sendShow: () => void;
-  /** Tells the page it left the screen; see `Method.show`. */
   sendHide: () => void;
+  sendOpen: (threadId: string) => void;
   resetLoad: () => void;
   sessionKey: () => string | null;
 };
 
-// Best-effort id for a payload that failed `parseInbound`, to decide whether
-// the failure is answerable.
 const extractRawId = (raw: string): string | undefined => {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -83,8 +80,8 @@ export const createHostPeer = (deps: {
   const { send, handlers } = deps;
   const warn = deps.warn ?? (() => {});
 
-  // Bumped by `resetLoad`; a `receive` from an older load neither mutates nor
-  // sends, so a slow `initialize` cannot answer the next page.
+  // A `receive` from an older load neither mutates nor sends, so a slow `initialize`
+  // cannot answer the next page.
   let generation = 0;
   let initializeLatch = false;
   let currentSessionKey: string | null = null;
@@ -103,7 +100,6 @@ export const createHostPeer = (deps: {
     send(JSON.stringify(withSessionParams({ jsonrpc: '2.0', id, error })));
   };
 
-  // JSON-RPC has no envelope for a reply with no id: warn and drop.
   const respondOrDrop = (
     id: string | undefined,
     code: number,
@@ -117,6 +113,85 @@ export const createHostPeer = (deps: {
     sendError(id, code, message, data);
   };
 
+  const authorized = (params: { sessionKey?: unknown } | undefined): boolean =>
+    currentSessionKey !== null && params?.sessionKey === currentSessionKey;
+
+  const unauthorized = (id: string | undefined): void =>
+    respondOrDrop(id, ErrorCode.unauthorized, 'Unauthorized', { reason: 'missing_session_key' });
+
+  // Settles a request; a result or error from an older load is dropped.
+  const answer = async (
+    id: string | undefined,
+    myGen: number,
+    run: () => Promise<unknown>,
+  ): Promise<void> => {
+    try {
+      const result = await run();
+      if (myGen !== generation) return;
+      if (id !== undefined) sendResult(id, result);
+    } catch (e) {
+      if (myGen !== generation) return;
+      // The page picks its error screen from the code; an unknown code reads as "Update needed".
+      const { code, message } = failure(e);
+      respondOrDrop(id, code, message);
+    }
+  };
+
+  type Params = Record<string, unknown>;
+  type Route = (params: Params, id: string | undefined, myGen: number) => void | Promise<void>;
+
+  const anyParams = (_v: unknown): _v is Params => true;
+
+  // Answers with the handler's result.
+  const call =
+    <P>(accepts: (v: unknown) => v is P, run: (params: P) => Promise<unknown>): Route =>
+    (params, id, myGen) => {
+      if (!accepts(params)) return respondOrDrop(id, ErrorCode.invalidParams, 'Invalid params');
+      return answer(id, myGen, () => run(params));
+    };
+
+  // Answers nothing, even when the page sent an id.
+  const notify =
+    <P>(accepts: (v: unknown) => v is P, run: (params: P) => void): Route =>
+    (params, id) => {
+      if (!accepts(params)) return respondOrDrop(id, ErrorCode.invalidParams, 'Invalid params');
+      run(params);
+    };
+
+  // A Map, so a method named `constructor` or `__proto__` finds no route.
+  const routes = new Map<string, Route>([
+    [Method.refreshIdentity, call(anyParams, () => handlers.refreshIdentity())],
+    [Method.openUrl, call(isOpenUrlParams, (p) => handlers.openUrl(p.url).then(() => null))],
+    [Method.ready, notify(anyParams, () => handlers.onReady())],
+    [Method.close, notify(anyParams, () => handlers.onClose())],
+    [
+      Method.identityError,
+      notify(isIdentityErrorParams, (p) => handlers.onIdentityError(p.reason, p.message)),
+    ],
+    [Method.backHandling, notify(isBackHandlingParams, (p) => handlers.onBackHandling(p.active))],
+    [
+      Method.unreadCountChanged,
+      notify(isUnreadCountParams, (p) => handlers.onUnreadCountChanged(p.count)),
+    ],
+  ]);
+
+  const initialize = async (id: string, params: Params, myGen: number): Promise<void> => {
+    if (!isInitializeParams(params)) {
+      sendError(id, ErrorCode.invalidParams, 'Invalid params');
+      return;
+    }
+    if (initializeLatch) {
+      sendError(id, ErrorCode.invalidRequest, 'initialize already completed for this page load');
+      return;
+    }
+    initializeLatch = true; // set before the await so a concurrent initialize is rejected
+    await answer(id, myGen, async () => {
+      const result = await handlers.initialize({ protocolVersion: params.protocolVersion });
+      if (myGen === generation) currentSessionKey = result.sessionKey;
+      return result;
+    });
+  };
+
   const receive = async (raw: string): Promise<void> => {
     const myGen = generation;
     const message = parseInbound(raw);
@@ -126,127 +201,42 @@ export const createHostPeer = (deps: {
       return;
     }
 
+    // The page never answers host requests; a response is only checked for the key.
     if (!('method' in message)) {
-      // A response is answerable but routes nowhere; only the key applies.
-      const providedKey = message.params?.sessionKey;
-      if (currentSessionKey === null || providedKey !== currentSessionKey) {
-        respondOrDrop(message.id, ErrorCode.unauthorized, 'Unauthorized', {
-          reason: 'missing_session_key',
-        });
-      }
-      return;
-    }
-
-    if (message.method === Method.initialize) {
-      if (!('id' in message)) return;
-
-      const { id } = message;
-      if (!isInitializeParams(message.params)) {
-        sendError(id, ErrorCode.invalidParams, 'Invalid params');
-        return;
-      }
-      if (initializeLatch) {
-        sendError(id, ErrorCode.invalidRequest, 'initialize already completed for this page load');
-        return;
-      }
-
-      initializeLatch = true; // set before the await so a concurrent initialize is rejected
-      try {
-        const result = await handlers.initialize({
-          protocolVersion: message.params.protocolVersion,
-        });
-        if (myGen !== generation) return;
-        currentSessionKey = result.sessionKey;
-        sendResult(id, result);
-      } catch {
-        if (myGen !== generation) return;
-        sendError(id, ErrorCode.internalError, 'Internal error');
-      }
+      if (!authorized(message.params)) unauthorized(message.id);
       return;
     }
 
     const id = 'id' in message ? message.id : undefined;
-    const providedKey = message.params.sessionKey;
-    if (currentSessionKey === null || providedKey !== currentSessionKey) {
-      respondOrDrop(id, ErrorCode.unauthorized, 'Unauthorized', { reason: 'missing_session_key' });
+
+    if (message.method === Method.initialize) {
+      if (id !== undefined) await initialize(id, message.params, myGen);
       return;
     }
 
-    switch (message.method) {
-      case Method.refreshIdentity: {
-        try {
-          const result = await handlers.refreshIdentity();
-          if (myGen !== generation) return;
-          if (id !== undefined) sendResult(id, result);
-        } catch (e) {
-          if (myGen !== generation) return;
-          const { code, message } = failure(e);
-          respondOrDrop(id, code, message);
-        }
-        return;
-      }
-      case Method.openUrl: {
-        if (!isOpenUrlParams(message.params)) {
-          respondOrDrop(id, ErrorCode.invalidParams, 'Invalid params');
-          return;
-        }
-        try {
-          await handlers.openUrl(message.params.url);
-          if (myGen !== generation) return;
-          if (id !== undefined) sendResult(id, null);
-        } catch (e) {
-          if (myGen !== generation) return;
-          const { code, message } = failure(e);
-          respondOrDrop(id, code, message);
-        }
-        return;
-      }
-      case Method.ready: {
-        handlers.onReady();
-        return;
-      }
-      case Method.close: {
-        handlers.onClose();
-        return;
-      }
-      case Method.identityError: {
-        if (!isIdentityErrorParams(message.params)) {
-          respondOrDrop(id, ErrorCode.invalidParams, 'Invalid params');
-          return;
-        }
-        handlers.onIdentityError(message.params.reason, message.params.message);
-        return;
-      }
-      case Method.backHandling: {
-        if (!isBackHandlingParams(message.params)) {
-          respondOrDrop(id, ErrorCode.invalidParams, 'Invalid params');
-          return;
-        }
-        handlers.onBackHandling(message.params.active);
-        return;
-      }
-      default: {
-        respondOrDrop(id, ErrorCode.methodNotFound, 'Method not found');
-      }
+    if (!authorized(message.params)) {
+      unauthorized(id);
+      return;
     }
+
+    const route = routes.get(message.method);
+    if (!route) {
+      respondOrDrop(id, ErrorCode.methodNotFound, 'Method not found');
+      return;
+    }
+    await route(message.params, id, myGen);
   };
 
-  const sendBack = (): void => {
+  // A page that has not handshaked would answer -32001.
+  const sendNotification = (method: Method, extra: Params = {}): void => {
     if (currentSessionKey === null) return;
     send(
       JSON.stringify({
         jsonrpc: '2.0',
-        method: Method.back,
-        params: { sessionKey: currentSessionKey },
+        method,
+        params: { sessionKey: currentSessionKey, ...extra },
       }),
     );
-  };
-
-  // Guarded on the session key like `sendBack`: a page that has not handshaked has no
-  // key to validate the notification against and would answer `-32001`.
-  const sendVisibility = (method: typeof Method.show | typeof Method.hide): void => {
-    if (currentSessionKey === null) return;
-    send(JSON.stringify({ jsonrpc: '2.0', method, params: { sessionKey: currentSessionKey } }));
   };
 
   const resetLoad = (): void => {
@@ -257,9 +247,10 @@ export const createHostPeer = (deps: {
 
   return {
     receive,
-    sendBack,
-    sendShow: () => sendVisibility(Method.show),
-    sendHide: () => sendVisibility(Method.hide),
+    sendBack: () => sendNotification(Method.back),
+    sendShow: () => sendNotification(Method.show),
+    sendHide: () => sendNotification(Method.hide),
+    sendOpen: (threadId) => sendNotification(Method.open, { threadId }),
     resetLoad,
     sessionKey: () => currentSessionKey,
   };

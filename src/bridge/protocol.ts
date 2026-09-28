@@ -1,10 +1,6 @@
-/** Mobile bridge protocol v1 (host role). Every `id` is a non-empty string;
- *  `guards.ts` enforces it. */
+/** Mobile bridge protocol v1. Every `id` is a non-empty string; `guards.ts` enforces it. */
 
 export const PROTOCOL_VERSION = 1 as const;
-
-// Typed `readonly number[]` so `.includes()` accepts any page `number` (TS2345).
-export const SUPPORTED_VERSIONS: readonly number[] = [PROTOCOL_VERSION];
 
 export const ErrorCode = {
   invalidRequest: -32600,
@@ -28,15 +24,16 @@ export const Method = {
   close: 'mentiora/close',
   backHandling: 'mentiora/backHandling',
   back: 'mentiora/back',
-  /**
-   * Host -> page, v1.1. `show` and `hide` report the warm overlay's visibility to the
-   * page's open/close signals: the page's own launch signal fires once per document, and
-   * a park through back or `close()` never reaches it. `InitializeResult.visible` covers
-   * a document that loads while parked. A page that predates them drops both
-   * notifications, which is why they are additive and need no version bump.
-   */
+  /** Host -> page, v1.1: warm overlay visibility. Older pages drop them, so no version
+   *  bump. A document loaded while parked gets `InitializeResult.visible` instead. */
   show: 'mentiora/show',
   hide: 'mentiora/hide',
+  /** Host -> page, warm pages only, after `ready`. A cold load gets
+   *  `InitializeResult.threadId` instead. */
+  open: 'mentiora/open',
+  /** Page -> host notification: total unread, capped at 100; same number as the
+   *  `message.missed` webhook's `unreadCount.total`. */
+  unreadCountChanged: 'mentiora/unreadCountChanged',
 } as const;
 
 export type Method = (typeof Method)[keyof typeof Method];

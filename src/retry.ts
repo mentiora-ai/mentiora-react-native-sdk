@@ -1,9 +1,19 @@
+import { sleep as defaultSleep } from './timers.js';
+
 export type RetryPolicy = {
   attempts: number;
   baseMs: number;
   capMs: number;
   totalBudgetMs: number;
 };
+
+/** Exponential from 1s, capped at 8s per step and 8s in total. */
+export const backoff = (attempts: number): RetryPolicy => ({
+  attempts,
+  baseMs: 1000,
+  capMs: 8000,
+  totalBudgetMs: 8000,
+});
 
 export const delaysFor = (policy: RetryPolicy, random: () => number = Math.random): number[] => {
   const out: number[] = [];
@@ -22,7 +32,7 @@ export const delaysFor = (policy: RetryPolicy, random: () => number = Math.rando
 export const retry = async <T>(
   fn: (attempt: number) => Promise<T>,
   policy: RetryPolicy,
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms: number) => Promise<void> = defaultSleep,
   random: () => number = Math.random,
 ): Promise<T> => {
   const delays = delaysFor(policy, random);

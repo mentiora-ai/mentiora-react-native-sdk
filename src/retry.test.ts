@@ -11,7 +11,7 @@ const policy = {
 
 test('delays grow exponentially, are capped, and never exceed the budget', () => {
   const d = delaysFor(policy, () => 1); // full jitter, worst case
-  assert.equal(d.length, 2); // 3 attempts = 2 waits
+  assert.equal(d.length, 2);
   assert.deepEqual(d, [1000, 2000]);
   assert.ok(d.reduce((a, b) => a + b, 0) <= policy.totalBudgetMs);
 });

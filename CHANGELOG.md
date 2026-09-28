@@ -1,11 +1,35 @@
 # Changelog
 
 Each entry names the bridge protocol version that release speaks. Shipped SDK
-versions live on inside customer app binaries, so this file is a compatibility
+versions live on inside host app binaries, so this file is a compatibility
 document.
 
 This file is the source of truth. GitHub Release notes are drafted from it, not
 the other way round.
+
+## Unreleased
+
+Speaks mobile bridge protocol **v1**, with additive messages an older page ignores.
+
+- Notifications for replies that arrive while the widget is closed. Your backend
+  sends the push from Mentiora's `message.missed` webhook; see the README.
+  - `Mentiora.getInstallRef()` and the `installRefChanged` event identify an anonymous user
+    in that webhook.
+  - `Mentiora.open({ threadId })`, `Mentiora.isMentioraPush(data)` and
+    `Mentiora.handleNotificationOpen(data)` route a notification tap to its thread.
+  - The `unreadCountChanged` event reports the unread total while the page is loaded.
+  - Bridge: `mentiora/open` (host to page), `mentiora/unreadCountChanged` (page to host),
+    and `InitializeResult.threadId`.
+- **Behaviour change:** `Mentiora.open()` called before `configure()` or before
+  `<MentioraHost />` mounts no longer throws. It waits for both, and warns in development
+  after 5 seconds.
+- `mentiora/initialize` from an install that was signed in, but has no identity now, answers
+  `-32002` (identity unavailable) instead of `-32603`, so the page can ask the user to sign in
+  again instead of showing "Update needed". `onEvent` also receives
+  `{ type: 'identityError', reason: 'identity_required' }`, so the app can pass `identity` or
+  call `Mentiora.logout()`.
+- A backgrounded app now counts as hidden: the widget sends the page `mentiora/hide` when the
+  app goes to the background and `mentiora/show` when it returns.
 
 ## 0.1.0
 

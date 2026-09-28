@@ -1,13 +1,9 @@
 import { sha256 } from 'js-sha256';
 
-/**
- * STANDS IN FOR YOUR SERVER. In a real app this belongs behind your own
- * `POST /identity/token` endpoint: shipping the identity key secret in a bundle lets
- * anyone forge tokens. Faked here so the identified path runs without deploying a server.
- * Mints an HS256 JWT with `sub`, `aud: 'mentiora'`, `iat`, `exp` and extra claims.
- */
+// STANDS IN FOR YOUR SERVER. Never ship this: the identity secret in a bundle lets anyone
+// forge tokens. A real app mints behind its own authenticated endpoint.
 
-/** UTF-8 bytes. `charCodeAt` alone corrupts any name outside ASCII. */
+/** Hermes does not guarantee `TextEncoder`. */
 const utf8 = (text: string): number[] => {
   const out: number[] = [];
   for (const char of text) {
@@ -27,7 +23,7 @@ const utf8 = (text: string): number[] => {
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
-/** base64url, unpadded — JWS needs no `btoa`, which Hermes does not guarantee. */
+/** Unpadded base64url; Hermes does not guarantee `btoa`. */
 const b64url = (bytes: ArrayLike<number>): string => {
   let out = '';
   for (let i = 0; i < bytes.length; i += 3) {
@@ -35,8 +31,6 @@ const b64url = (bytes: ArrayLike<number>): string => {
     const b = bytes[i + 1] ?? 0;
     const c = bytes[i + 2] ?? 0;
     const left = bytes.length - i;
-    // `charAt`, not indexing: every index here is in range, but indexed access is typed
-    // `string | undefined` and a `!` would hide a real bug if the alphabet ever changed.
     out += ALPHABET.charAt(a >> 2) + ALPHABET.charAt(((a & 3) << 4) | (b >> 4));
     if (left > 1) out += ALPHABET.charAt(((b & 15) << 2) | (c >> 6));
     if (left > 2) out += ALPHABET.charAt(c & 63);
@@ -75,10 +69,7 @@ export const mintIdentityToken = (secret: string, options: MintOptions): string 
 
 const ROUND_TRIP_MS = 120;
 
-/**
- * A real handler reads `sub` from the caller's session, not from the client. Rejecting an
- * empty `sub` mirrors a real endpoint's 204 for a signed-out caller.
- */
+/** A real handler takes `sub` from the caller's session, never from the client. */
 export const issueIdentityToken = async (secret: string, options: MintOptions): Promise<string> => {
   await new Promise((resolve) => setTimeout(resolve, ROUND_TRIP_MS));
   if (options.sub === '') throw new Error('nobody is signed in');

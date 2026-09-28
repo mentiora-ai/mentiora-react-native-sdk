@@ -1,21 +1,26 @@
 import { MentioraHost } from '@mentiora/react-native-sdk';
 import { Stack } from 'expo-router';
 import type React from 'react';
+import { useEffect } from 'react';
 import { isConfigured, isMalformed } from '../src/config';
+import { enablePush, listenForTaps } from '../src/push';
 import { SetupRequired } from '../src/SetupRequired';
 
 export default function RootLayout(): React.JSX.Element {
-  // The home screen is the only `Mentiora.configure()` caller; sign-in/out reconfigures there.
+  useEffect(() => listenForTaps(), []);
+  // A real app asks for push permission in context, e.g. after the user's first message.
+  useEffect(() => {
+    if (isConfigured) void enablePush();
+  }, []);
+
   if (!isConfigured) return <SetupRequired malformed={isMalformed} />;
 
-  // LAST child, not first: the host draws a sibling overlay now rather than presenting a
-  // Modal, so it covers the navigator only by being later in the tree.
+  // Must be the last child: its overlay covers the navigator only by coming later in the tree.
   return (
     <>
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        {/* No header: the SDK applies window safe-area insets, so a header would double-pad
-            the top. The screen navigates back on the page's close event. */}
+        {/* The SDK applies safe-area insets; a header would double-pad the top. */}
         <Stack.Screen name="inline" options={{ headerShown: false }} />
       </Stack>
       <MentioraHost />

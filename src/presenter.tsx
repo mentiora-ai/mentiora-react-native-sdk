@@ -1,152 +1,225 @@
 /**
- * Presents `<MentioraWidget />` in a full-screen overlay mounted at the app root.
- *
- * The overlay is mounted on the first `open()` and kept mounted afterwards, so the
- * page's document and JS context survive a close and the next open costs a transform
- * rather than a page load. Nothing is mounted before the first open, so an app whose
- * user never opens the widget pays nothing.
- *
- * NOT a `Modal`: `Modal.render()` returns `null` whenever it is not showing, so its
- * children unmount and the WebView is destroyed — `visible={false}` keeps nothing warm.
- * Hiding is a translate off-screen, never `display: 'none'`, zero size or an unmount:
- * iOS creates the `WKWebView` lazily in `didMoveToWindow` and tears it down when the
- * view leaves the hierarchy, so any of those loses the document we are keeping.
- *
- * `AppRegistry.setWrapperComponentProvider` cannot replace `<MentioraHost />`: it has
- * no getter to chain an existing wrapper, and `runApplication` reads it once at launch.
+ * Overlay mounted on the first `open()` and kept mounted so the page stays warm.
+ * Not a `Modal`: it unmounts children when hidden. Hidden by translating off-screen:
+ * iOS tears down the `WKWebView` on `display: 'none'`, zero size or leaving the window.
  */
 import type React from 'react';
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { BackHandler, StyleSheet, useWindowDimensions, View } from 'react-native';
-import type { BackPress } from './back-channel.js';
-import { BackChannelContext } from './back-channel.js';
+import {
+  BackChannelContext,
+  type BackPress,
+  isMentioraPush,
+  type ThreadChannel,
+  ThreadChannelContext,
+} from './channels.js';
 import { MentioraWidget } from './MentioraWidget.js';
-import { getRuntime } from './runtime.js';
+import { getRuntime, type MentioraRuntime } from './runtime.js';
 import type { MentioraConfig, MentioraEvent } from './types.js';
 import { parseWidgetUrl } from './widget-url.js';
 
 type PresenterState = {
   visible: boolean;
-  /** Latched by the first `open()`. Never cleared: it is what keeps the page warm. */
   mounted: boolean;
   config: MentioraConfig | null;
   activeHostId: number | null;
 };
 
-let state: PresenterState = {
-  visible: false,
-  mounted: false,
-  config: null,
-  activeHostId: null,
-};
-const listeners = new Set<() => void>();
-// Added from a layout effect so an `open()` in a sibling's passive mount effect
-// of the same commit already sees the host.
-const hostIds: number[] = [];
-// Ownership is picked from here so the owner is one that gets notified.
-const subscribedIds: number[] = [];
-let nextHostId = 0;
+const HELD_OPEN_WARN_MS = 5000;
+
+// All module state, so a test reset is one assignment.
+const createStore = () => ({
+  state: { visible: false, mounted: false, config: null, activeHostId: null } as PresenterState,
+  listeners: new Set<() => void>(),
+  /** Committed hosts; `open()` is held while there are none. */
+  hostIds: new Set<number>(),
+  /** Hosts subscribed to the store, oldest first. The owner is picked from here so it is
+   *  always a host that gets notified. */
+  subscribedIds: new Set<number>(),
+  nextHostId: 0,
+  // One slot: a later notification tap replaces an untaken one.
+  pendingThreadId: null as string | null,
+  threadListeners: new Set<() => void>(),
+  // A notification tap that cold-starts the app calls `open()` before React renders.
+  heldOpen: false,
+  heldWarning: null as ReturnType<typeof setTimeout> | null,
+  // Subscribed here, not in the overlay: a logout before the first open still rotates the id.
+  refRuntime: null as MentioraRuntime | null,
+  refUnsubscribe: null as (() => void) | null,
+});
+
+let store = createStore();
 
 const notify = (): void => {
-  for (const fn of listeners) fn();
+  for (const fn of store.listeners) fn();
 };
 
-// Oldest host owns the overlay, so two hosts mounted across a screen transition
-// never show two widgets.
-const registerHost = (id: number, onChange: () => void): (() => void) => {
-  listeners.add(onChange);
-  // StrictMode, Offscreen and Fast Refresh re-run effects without re-rendering;
-  // without the re-add, `open()` would throw with a host still mounted.
-  if (!hostIds.includes(id)) hostIds.push(id);
-  if (!subscribedIds.includes(id)) subscribedIds.push(id);
-  if (state.activeHostId === null) state = { ...state, activeHostId: id };
+const setState = (patch: Partial<PresenterState>): void => {
+  store.state = { ...store.state, ...patch };
   notify();
+};
+
+const threadChannel: ThreadChannel = {
+  take: () => {
+    const id = store.pendingThreadId;
+    store.pendingThreadId = null;
+    return id;
+  },
+  subscribe: (fn) => {
+    const { threadListeners } = store;
+    threadListeners.add(fn);
+    return () => threadListeners.delete(fn);
+  },
+};
+
+const clearHeldWarning = (): void => {
+  if (store.heldWarning !== null) clearTimeout(store.heldWarning);
+  store.heldWarning = null;
+};
+
+const warnHeldOpen = (): void => {
+  if (!__DEV__ || store.heldWarning !== null) return;
+  store.heldWarning = setTimeout(() => {
+    store.heldWarning = null;
+    console.warn(
+      store.state.config
+        ? 'Mentiora.open() is waiting for <MentioraHost />. Mount it once at your app root, as the LAST child so it draws over your navigator.'
+        : 'Mentiora.open() is waiting for Mentiora.configure(config) and <MentioraHost />.',
+    );
+  }, HELD_OPEN_WARN_MS);
+};
+
+const canShow = (): boolean => store.state.config !== null && store.hostIds.size > 0;
+
+const show = (): void => {
+  // Before `visible` flips, so a ready page gets `open` ahead of `show`.
+  for (const fn of store.threadListeners) fn();
+  setState({ visible: true, mounted: true });
+};
+
+const runHeldOpen = (): void => {
+  if (!store.heldOpen || !canShow()) return;
+  store.heldOpen = false;
+  clearHeldWarning();
+  show();
+};
+
+const followInstallRef = (config: MentioraConfig): void => {
+  const runtime = getRuntime(config);
+  if (runtime === store.refRuntime) return;
+  store.refUnsubscribe?.();
+  store.refRuntime = runtime;
+  store.refUnsubscribe = runtime.onInstallRefChange((installRef) => {
+    store.state.config?.onEvent?.({ type: 'installRefChanged', installRef });
+  });
+};
+
+const oldest = (ids: Set<number>): number | null => ids.values().next().value ?? null;
+
+// Oldest host owns the overlay, so two hosts across a screen transition show one widget.
+// A `Set` ignores a re-add: StrictMode, Offscreen and Fast Refresh re-run effects.
+const registerHost = (id: number, onChange: () => void): (() => void) => {
+  const { listeners, hostIds, subscribedIds } = store;
+  listeners.add(onChange);
+  hostIds.add(id);
+  subscribedIds.add(id);
+  if (store.state.activeHostId === null) setState({ activeHostId: id });
+  else notify();
   return () => {
     listeners.delete(onChange);
-    const index = hostIds.indexOf(id);
-    if (index >= 0) hostIds.splice(index, 1);
-    const subscribed = subscribedIds.indexOf(id);
-    if (subscribed >= 0) subscribedIds.splice(subscribed, 1);
-    if (state.activeHostId === id) state = { ...state, activeHostId: subscribedIds[0] ?? null };
-    notify();
+    hostIds.delete(id);
+    subscribedIds.delete(id);
+    if (store.state.activeHostId === id) setState({ activeHostId: oldest(subscribedIds) });
+    else notify();
   };
 };
 
-const getSnapshot = (): PresenterState => state;
+const getSnapshot = (): PresenterState => store.state;
+
+const requireConfig = (method: string): MentioraConfig => {
+  const { config } = store.state;
+  if (!config) {
+    throw new Error(
+      `Mentiora.${method}() was called before Mentiora.configure(config). Call Mentiora.configure() first.`,
+    );
+  }
+  return config;
+};
 
 export const Mentiora = {
   configure(config: MentioraConfig): void {
-    // Here, not at `open()`: a bad URL fails at startup rather than on the user's tap.
+    // Validated here so a bad URL fails at startup, not on the user's tap.
     parseWidgetUrl(config.widgetUrl);
-    const previous = state.config;
-    state = { ...state, config };
-    notify();
-    // A signed-in user reopening a warm widget used to stay anonymous: the page keeps
-    // the credential it booted with, and only a new document runs `initialize` again.
-    // Unchanged identity must NOT reload — `strings` and `onEvent` change freely.
-    if (state.mounted && previous !== null && previous.identity !== config.identity) {
+    const previous = store.state.config;
+    followInstallRef(config);
+    setState({ config });
+    // The page keeps the credential it booted with; only a new document re-runs `initialize`.
+    // Reload on identity change only: `strings` and `onEvent` change freely.
+    if (store.state.mounted && previous !== null && previous.identity !== config.identity) {
       getRuntime(config).reload();
     }
+    runHeldOpen();
   },
-  async open(): Promise<void> {
-    if (!state.config) {
-      throw new Error(
-        'Mentiora.open() was called before Mentiora.configure(config). Call Mentiora.configure() first.',
-      );
+  /** Held until both `configure()` has run and `<MentioraHost />` has mounted. */
+  async open(options?: { threadId?: string }): Promise<void> {
+    if (options?.threadId) store.pendingThreadId = options.threadId;
+    if (!canShow()) {
+      store.heldOpen = true;
+      warnHeldOpen();
+      return;
     }
-    if (hostIds.length === 0) {
-      throw new Error(
-        'Mentiora.open() needs <MentioraHost /> mounted once at your app root, as the LAST child so it draws over your navigator.',
-      );
-    }
-    state = { ...state, visible: true, mounted: true };
-    notify();
+    show();
   },
-  /** No-op when not configured or already closed. Leaves the page mounted and warm. */
+  /** Leaves the page mounted and warm. */
   close(): void {
-    if (!state.config || !state.visible) return;
-    state = { ...state, visible: false };
-    notify();
+    if (!store.state.config || !store.state.visible) return;
+    setState({ visible: false });
   },
-  /** Rotates the install id, clears the identity cache and reloads every mounted
-   *  widget. Throws before `configure()`: resolving would leave the previous
-   *  user's install id in place. */
+  /** Rotates the install id and reloads mounted widgets. Throws before `configure()`
+   *  so the previous user's install id is never silently kept. */
   async logout(): Promise<void> {
-    if (!state.config) {
-      throw new Error(
-        'Mentiora.logout() was called before Mentiora.configure(config). Call Mentiora.configure() first.',
-      );
-    }
-    await getRuntime(state.config).logout();
+    const config = requireConfig('logout');
+    // A previous user's tap must not open the next user's page on that thread.
+    store.pendingThreadId = null;
+    await getRuntime(config).logout();
+  },
+  /** The key `message.missed` webhooks carry when there is no `externalUserId`.
+   *  `null` until the widget has been opened once. */
+  async getInstallRef(): Promise<string | null> {
+    return getRuntime(requireConfig('getInstallRef')).installRef();
+  },
+  /** Whether a push's data block is Mentiora's: `{ mentiora: '1', threadId }`. */
+  isMentioraPush(data: unknown): boolean {
+    return isMentioraPush(data);
+  },
+  /** Returns `false` and does nothing for a push that is not Mentiora's. */
+  handleNotificationOpen(data: unknown): boolean {
+    if (!isMentioraPush(data)) return false;
+    void Mentiora.open({ threadId: data.threadId });
+    return true;
   },
 };
 
 /** Test-only. Call before rendering: a mounted host is lost until it resubscribes. */
 export const __resetPresenter = (): void => {
-  state = { visible: false, mounted: false, config: null, activeHostId: null };
-  listeners.clear();
-  hostIds.length = 0;
-  subscribedIds.length = 0;
-  nextHostId = 0;
+  clearHeldWarning();
+  store.refUnsubscribe?.();
+  store = createStore();
 };
 
-/**
- * The component a host app mounts once, at its app root and as the LAST child, so the
- * overlay draws over the navigator. A `Modal` used to make order irrelevant; an overlay
- * obeys sibling order.
- */
+/** Mount once at the app root as the LAST child, so the overlay draws over the navigator. */
 export function MentioraHost(): React.JSX.Element | null {
   const id = useRef<number | undefined>(undefined);
-  if (id.current === undefined) id.current = nextHostId++;
+  if (id.current === undefined) id.current = store.nextHostId++;
   const hostId = id.current;
 
-  // Layout phase: visible to a same-commit `open()`, and a render that never
-  // commits never counts.
+  // Layout phase: visible to a same-commit `open()`; an uncommitted render never counts.
   useLayoutEffect(() => {
-    if (!hostIds.includes(hostId)) hostIds.push(hostId);
+    const { hostIds } = store;
+    hostIds.add(hostId);
+    runHeldOpen();
     return () => {
-      const index = hostIds.indexOf(hostId);
-      if (index >= 0) hostIds.splice(index, 1);
+      hostIds.delete(hostId);
     };
   }, [hostId]);
 
@@ -175,20 +248,17 @@ function Overlay({
 
   const onEvent = useCallback(
     (event: MentioraEvent) => {
-      // Before the host callback: if that throws on `close`, the overlay would be
-      // stranded over a blank `<View />`.
+      // Before the host callback, so a throwing callback cannot strand the overlay.
       if (event.type === 'close') Mentiora.close();
+      // Already forwarded by `followInstallRef`.
+      if (event.type === 'installRefChanged') return;
       config.onEvent?.(event);
     },
     [config],
   );
 
-  /**
-   * What `Modal.onRequestClose` used to do. Registered from the overlay rather than
-   * the widget so it runs FIRST: React flushes child effects before the parent's, and
-   * `BackHandler` calls the newest subscriber first. The page's own claim is consulted
-   * through the back channel, exactly as the Modal did.
-   */
+  // Registered in the overlay so it runs first: child effects flush before the parent's,
+  // and `BackHandler` calls the newest subscriber first.
   const onHardwareBack = useCallback((): boolean => {
     if (!visible) return false;
     if (backPress.current?.()) return true;
@@ -203,22 +273,24 @@ function Overlay({
     };
   }, [onHardwareBack]);
 
-  // Translated off-screen rather than hidden. A non-zero frame inside the window is
-  // what keeps the iOS web content process alive.
   const { height } = useWindowDimensions();
 
   return (
     <BackChannelContext.Provider value={registerBackPress}>
-      <View
-        testID="mentiora-overlay"
-        style={[StyleSheet.absoluteFill, visible ? null : { transform: [{ translateY: height }] }]}
-        pointerEvents={visible ? 'auto' : 'none'}
-        // A parked widget is not on screen, so it must not be reachable by a screen reader.
-        accessibilityElementsHidden={!visible}
-        importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
-      >
-        <MentioraWidget {...config} onEvent={onEvent} visible={visible} />
-      </View>
+      <ThreadChannelContext.Provider value={threadChannel}>
+        <View
+          testID="mentiora-overlay"
+          style={[
+            StyleSheet.absoluteFill,
+            visible ? null : { transform: [{ translateY: height }] },
+          ]}
+          pointerEvents={visible ? 'auto' : 'none'}
+          accessibilityElementsHidden={!visible}
+          importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+        >
+          <MentioraWidget {...config} onEvent={onEvent} visible={visible} />
+        </View>
+      </ThreadChannelContext.Provider>
     </BackChannelContext.Provider>
   );
 }

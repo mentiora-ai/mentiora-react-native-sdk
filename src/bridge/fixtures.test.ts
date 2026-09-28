@@ -10,7 +10,7 @@ import { createHostPeer } from './peer.js';
 const FIXTURES = join(process.cwd(), 'src/bridge/v1/fixtures');
 const fixture = (name: string) => JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), 'utf8'));
 
-const KEY = 'sk-9f2a1b7e3d4c'; // the deterministic key every fixture uses
+const KEY = 'sk-9f2a1b7e3d4c';
 
 const initializeMessage = () => ({
   jsonrpc: '2.0',
@@ -33,6 +33,7 @@ const stubHandlers = (sessionKey: string): HostHandlers => ({
   onClose: () => {},
   onIdentityError: () => {},
   onBackHandling: () => {},
+  onUnreadCountChanged: () => {},
 });
 
 test('host fixture: an unauthorized message gets the complete -32001 envelope', async () => {
@@ -62,6 +63,7 @@ for (const name of [
   'back-handling',
   'unknown-method',
   'visibility',
+  'unread-count',
 ]) {
   test(`page fixture ${name}: every page->host step routes without error`, async () => {
     const fx = fixture(name);
@@ -97,3 +99,32 @@ for (const name of [
     }
   });
 }
+
+test('page fixture unread-count: each count reaches the handler in order', async () => {
+  const fx = fixture('unread-count');
+  const counts: number[] = [];
+  const peer = createHostPeer({
+    send: () => {},
+    handlers: { ...stubHandlers(KEY), onUnreadCountChanged: (count) => counts.push(count) },
+  });
+  await peer.receive(JSON.stringify(initializeMessage()));
+  for (const step of fx.steps) await peer.receive(JSON.stringify(step.message));
+  assert.deepEqual(counts, [2, 0]);
+});
+
+test('page fixture open: sendOpen produces every host->page envelope exactly', async () => {
+  const fx = fixture('open');
+  assert.equal(fx.role, 'page');
+  const sent: string[] = [];
+  const peer = createHostPeer({ send: (r) => sent.push(r), handlers: stubHandlers(KEY) });
+  await peer.receive(JSON.stringify(initializeMessage()));
+  sent.length = 0;
+  const expected = fx.steps
+    .filter((st: { direction: string }) => st.direction === 'host->page')
+    .map((st: { message: { params: { threadId: string } } }) => st.message);
+  for (const message of expected) peer.sendOpen(message.params.threadId);
+  assert.deepEqual(
+    sent.map((r) => JSON.parse(r)),
+    expected,
+  );
+});

@@ -1,20 +1,22 @@
-// Bridge wiring end to end: real peer, random source and runtime; only the WebView is mocked.
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Linking } from 'react-native';
-import {
-  __lastWebView,
-  __resetWebViews,
-  __webViews,
-  type MockWebViewRef,
-} from '../../__mocks__/react-native-webview';
+import { __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
+import { toBase64Url } from '../base64url';
 import { MentioraWidget } from '../MentioraWidget';
-import { RANDOM_REPLY_TAG, toBase64Url } from '../random';
+import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes, getRuntime } from '../runtime';
 import { SDK_NAME, SDK_VERSION } from '../version';
-
-const ORIGIN = 'https://w.x.ai';
-const KEY = 'pk_wgt_a';
-const WIDGET_URL = `${ORIGIN}/h/rn/${KEY}`;
+import {
+  answerLastRandom,
+  initialize,
+  KEY,
+  ORIGIN,
+  randomScripts,
+  scripts,
+  sent,
+  sentFrom,
+  WIDGET_URL,
+} from './helpers';
 
 const openURL = Linking.openURL as jest.Mock;
 
@@ -24,55 +26,9 @@ beforeEach(() => {
   __resetWebViews();
 });
 
-const scripts = (view: MockWebViewRef = __lastWebView()): string[] =>
-  (view.injectJavaScript as jest.Mock).mock.calls.map(([script]: [string]) => script);
-
-// Host-to-page only: the random-bytes request shares the channel but is not a bridge message.
-const BRIDGE_INJECTION = /^window\.mentioraHost\.receive\((.*)\);true;$/s;
-
-const sentFrom = (view: MockWebViewRef): Record<string, unknown>[] =>
-  scripts(view).flatMap((script) => {
-    const m = BRIDGE_INJECTION.exec(script);
-    return m ? [JSON.parse(JSON.parse(m[1] as string) as string) as Record<string, unknown>] : [];
-  });
-
-const sent = (): Record<string, unknown>[] => sentFrom(__lastWebView());
-
 const waitForSent = (n: number): Promise<void> =>
   waitFor(() => {
     expect(sent().length).toBeGreaterThanOrEqual(n);
-  });
-
-const randomScripts = (): string[] => scripts().filter((s) => s.includes(RANDOM_REPLY_TAG));
-
-// Only a reply echoing the request's nonce counts; the tag is a module constant.
-const nonceOf = (script: string): string => {
-  const m = /,k="([^"]+)"/.exec(script);
-  if (!m) throw new Error('the injected random script carries no nonce');
-  return m[1] as string;
-};
-
-const answerLastRandom = (el: ReturnType<typeof screen.getByTestId>, count = 16) =>
-  fireEvent(el, 'message', {
-    nativeEvent: {
-      data: JSON.stringify({
-        tag: RANDOM_REPLY_TAG,
-        nonce: nonceOf(randomScripts().at(-1) as string),
-        bytes: Array(count).fill(7),
-      }),
-    },
-  });
-
-const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion = 1) =>
-  fireEvent(el, 'message', {
-    nativeEvent: {
-      data: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'r1',
-        method: 'mentiora/initialize',
-        params: { protocolVersion },
-      }),
-    },
   });
 
 const mount = async () => {
@@ -146,7 +102,6 @@ test('the random reply is taken by the router and never reaches the peer', async
   }
 });
 
-// Authenticating on `obj.tag` alone lets the page's sandboxed iframe choose the session key.
 test('a tagged reply with the wrong nonce cannot choose the session key', async () => {
   const real = globalThis.crypto;
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
@@ -164,7 +119,6 @@ test('a tagged reply with the wrong nonce cannot choose the session key', async 
       },
     });
     expect(sent()).toHaveLength(0);
-    // It fell through to the peer and was dropped id-less: not treated as our reply.
     expect(warn).toHaveBeenCalled();
 
     await answerLastRandom(el);
@@ -266,7 +220,6 @@ test('an allowed top-frame navigation is a load boundary and resets the session'
   expect(sent().at(-1)).toMatchObject({ error: { code: -32001 } });
 });
 
-// `beginFreshLoad` on every top-frame request makes a `#thread` jump drop a live session key.
 test('a fragment-only navigation is not a load boundary', async () => {
   const el = await mount();
   await fireEvent(el, 'shouldStartLoadWithRequest', {
@@ -309,14 +262,13 @@ test('a fragment jump does NOT reopen the keyless initialize latch', async () =>
     url: `${ORIGIN}/h/rn/${KEY}#thread-2`,
     isTopFrame: true,
   });
-  await initialize(el); // the same document asking twice
+  await initialize(el);
   await waitForSent(2);
   expect(sent().at(-1)).toMatchObject({ error: { code: -32600 } });
 });
 
-// A same-URL navigation and a fragment removal are full document navigations; read as
-// fragment jumps they leave the new document on -32600 and blank. The third row's URLs
-// are fragment-identical, isolating `navigationType`.
+// Same-URL and fragment-removal navigations are full document loads. The third row's
+// URLs are fragment-identical, isolating `navigationType`.
 test.each([
   ['a same-URL navigation (location.reload / a link to the current path)', '', '', undefined],
   ['a fragment removal (#t -> the bare path)', '#t', '', undefined],
@@ -383,8 +335,7 @@ test('a denied non-https navigation is never handed to the OS either', async () 
     isTopFrame: true,
   });
   expect(allowed).toBe(false);
-  // NOT `waitFor(() => expect(…).not.toHaveBeenCalled())`: a negative returns on
-  // waitFor's first synchronous evaluation, so it never waits. Flush, then assert.
+  // A negative inside `waitFor` passes on its first synchronous check, so flush, then assert.
   await act(async () => {});
   expect(openURL).not.toHaveBeenCalled();
 });
@@ -485,7 +436,6 @@ test('refreshIdentity with no identity configured answers -32002, not -32603', a
 test('the identity provider is read live, so a reconfigure is not ignored', async () => {
   const first = { getToken: () => 'token-one' };
   const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} identity={first} />);
-  // Same embedKey, new `identity` reference: getRuntime swaps the provider in place.
   const second = { getToken: () => 'token-two' };
   await view.rerender(<MentioraWidget widgetUrl={WIDGET_URL} identity={second} />);
   const el = screen.getByTestId('mentiora-webview');
@@ -538,8 +488,6 @@ test('degraded storage is reported through onEvent, not only to a stripped __DEV
 });
 
 test('the reason travels with the event — the three fallbacks need different fixes', async () => {
-  // 'peer-absent' means install the peer, 'no-require' means pass `storage`; a
-  // hard-coded reason passes the test above and misdirects every customer.
   const warn = degradeStorage('no-require');
   const onEvent = jest.fn();
   try {
@@ -572,8 +520,6 @@ test('one degraded store is reported once per embed key, not once per presentati
   }
 });
 
-// The key is customer input in a URL path segment: decoded into the loaded URL, a `/` or
-// `?` in it would load a different path instead of the widget.
 test('an encoded key stays percent-encoded in its one path segment', async () => {
   await render(<MentioraWidget widgetUrl={`${ORIGIN}/h/rn/pk%20wgt%2F..%2Fx%3Fy%23z`} />);
   expect(screen.getByTestId('mentiora-webview').props.source).toEqual({

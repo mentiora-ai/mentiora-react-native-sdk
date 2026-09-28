@@ -2,7 +2,6 @@ import type React from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-/** Rendered instead of the app when the widget URL is missing or unparseable. */
 export function SetupRequired({ malformed }: { malformed: boolean }): React.JSX.Element {
   return (
     <SafeAreaView testID="setup-required" style={styles.container}>
@@ -24,9 +23,8 @@ export function SetupRequired({ malformed }: { malformed: boolean }): React.JSX.
       )}
       <Text style={styles.code}>https://widget.acme.mentiora.ai/h/rn/pk_wgt_…</Text>
       <Text style={styles.body}>
-        From the install snippet in Mentiora admin, or printed by{' '}
-        <Text style={styles.code}>just widget</Text> in the backend repo. Expo inlines it at bundle
-        time, so restart the bundler afterwards.
+        Copy it from the install snippet in Mentiora admin. Expo inlines it at bundle time, so
+        restart the bundler afterwards.
       </Text>
     </SafeAreaView>
   );

@@ -1,7 +1,7 @@
 import type React from 'react';
 import { Pressable, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import type { MentioraErrorCode } from '../types.js';
-import { DEFAULT_STRINGS, type MentioraStrings } from './strings.js';
+import { type MentioraStrings, resolveStrings } from './strings.js';
 
 export type ErrorScreenProps = {
   strings?: Partial<MentioraStrings>;
@@ -10,19 +10,10 @@ export type ErrorScreenProps = {
   onDismiss: () => void;
 };
 
-/** Covers a dead WebView. Dismiss is the only way out, since the page draws its
- *  own chrome. `code` is not displayed. */
+/** Dismiss is the only way out: the page draws its own chrome, which is gone. */
 export function ErrorScreen(props: ErrorScreenProps): React.JSX.Element {
-  const { strings, onRetry, onDismiss } = props;
-  // Not a spread: an explicit `undefined` would blank a label.
-  const s = { ...DEFAULT_STRINGS };
-  for (const key of Object.keys(DEFAULT_STRINGS) as (keyof MentioraStrings)[]) {
-    const value = strings?.[key];
-    if (value !== undefined) s[key] = value;
-  }
-
-  // Follows the system scheme so a dark app is not flashed white; hosts wanting their own
-  // design use `renderError`.
+  const { onRetry, onDismiss } = props;
+  const s = resolveStrings(props.strings);
   const palette = useColorScheme() === 'dark' ? DARK : LIGHT;
 
   return (
@@ -33,24 +24,30 @@ export function ErrorScreen(props: ErrorScreenProps): React.JSX.Element {
       <Text style={[styles.title, { color: palette.text }]}>{s.errorTitle}</Text>
       <Text style={[styles.body, { color: palette.text }]}>{s.errorBody}</Text>
       <View style={styles.actions}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={s.retry}
-          style={[styles.button, { backgroundColor: palette.button }]}
-          onPress={onRetry}
-        >
-          <Text style={[styles.buttonText, { color: palette.text }]}>{s.retry}</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={s.dismiss}
-          style={[styles.button, { backgroundColor: palette.button }]}
-          onPress={onDismiss}
-        >
-          <Text style={[styles.buttonText, { color: palette.text }]}>{s.dismiss}</Text>
-        </Pressable>
+        <Button label={s.retry} palette={palette} onPress={onRetry} />
+        <Button label={s.dismiss} palette={palette} onPress={onDismiss} />
       </View>
     </View>
+  );
+}
+
+type Palette = typeof LIGHT;
+
+function Button(props: {
+  label: string;
+  palette: Palette;
+  onPress: () => void;
+}): React.JSX.Element {
+  const { label, palette, onPress } = props;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={[styles.button, { backgroundColor: palette.button }]}
+      onPress={onPress}
+    >
+      <Text style={[styles.buttonText, { color: palette.text }]}>{label}</Text>
+    </Pressable>
   );
 }
 

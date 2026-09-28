@@ -7,19 +7,16 @@ import { issueIdentityToken } from './fake-backend';
 export const widgetUrl = (process.env.EXPO_PUBLIC_MENTIORA_WIDGET_URL ?? '').trim();
 const identitySecret = process.env.EXPO_PUBLIC_MENTIORA_IDENTITY_SECRET ?? '';
 
-// The shape `Mentiora.configure()` accepts. Checked here too so a bad value shows the setup
-// screen instead of throwing from the first `configure()`.
+// Mirrors `Mentiora.configure()`'s check so a bad value shows the setup screen, not a throw.
 export const isConfigured = /^https?:\/\/[^/?#]+\/h\/rn\/[^/?#]+\/?$/.test(widgetUrl);
 
 export const isMalformed = widgetUrl !== '' && !isConfigured;
 
-/** Identity key secret (Mentiora admin: Embed → Identity keys). A real app keeps it on its
- *  server; `src/fake-backend.ts` stands in for one. Unset means Sign in is disabled. */
+/** Mentiora admin: Embed → Identity keys. A real app keeps this on its server. */
 const backendSecret = identitySecret.trim();
 
 export const canSignIn = backendSecret !== '';
 
-// Read on every mint, so changing credentials never replaces `identityFetcher`.
 let currentSub = '';
 let currentName = '';
 export const setCredentials = (sub: string, name: string): void => {
@@ -27,11 +24,8 @@ export const setCredentials = (sub: string, name: string): void => {
   currentName = name;
 };
 
-/**
- * Built once: the SDK compares `identity` by reference and a new object discards its
- * cached token. Against a real backend, `getToken` becomes a `fetch` to your token
- * endpoint, or use the declarative `{ endpoint, headers, body }` form.
- */
+/** Built once: the SDK compares `identity` by reference and drops its cached token on change.
+ *  A real `getToken` fetches your token endpoint, or use `{ endpoint, headers, body }`. */
 export const identityFetcher: MentioraIdentity = {
   getToken: async () => {
     try {

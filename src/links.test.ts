@@ -56,7 +56,6 @@ test('isSameOrigin accepts a long, legitimately same-origin url -- no length bou
 });
 
 test('the CONFIGURED origin is normalised too, not just the url', () => {
-  // Lowercasing only the url side sends the widget's own pages to the system browser.
   assert.equal(
     isSameOrigin('https://widget.acme.mentiora.ai/h/rn/k', 'HTTPS://Widget.Acme.Mentiora.AI'),
     true,
@@ -135,7 +134,6 @@ test('an IPv6 host is a different literal string than the configured hostname', 
 });
 
 test('a trailing space on the host is stripped by clean(), changing what host is compared', () => {
-  // clean() strips the space rather than inventing a host that reads as same-origin.
   assert.equal(
     isSameOrigin('https://widget.acme.mentiora.ai /evil', 'https://widget.acme.mentiora.ai'),
     true,
@@ -157,7 +155,6 @@ test('single-slash and triple-slash forms are not treated as authority-bearing',
   );
 });
 
-// A fragment jump is the same document; treating it as a load boundary drops a live session key.
 test('isSameDocument ignores the fragment and nothing else', () => {
   const base = 'https://w.x.ai/h/rn/k';
   assert.equal(isSameDocument(base, `${base}#thread-2`), true);

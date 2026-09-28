@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { toBase64Url } from './base64url.js';
 import { wasSignedInKey } from './identity.js';
-import { createRandomSource, toBase64Url } from './random.js';
+import { installRefOf } from './install-id.js';
+import { createRandomSource } from './random.js';
 import { __resetRuntimes, getRuntime } from './runtime.js';
 
-// Carries its own store: under `node --test` the AsyncStorage peer resolves to its web
-// build, whose `getItem` throws on `window.localStorage`. `getRuntime` keeps the first
-// storage per embed key, so tests that observe the store pass theirs on first call.
+// Own store: under `node --test` AsyncStorage's web build throws on `window.localStorage`.
+// `getRuntime` keeps the first storage per embed key, so pass the store on first call.
 const cfg = (embedKey: string) => {
   const store = new Map<string, string>();
   return {
@@ -73,7 +74,7 @@ test('logout with no subscribers rotates and does not throw', async () => {
   __resetRuntimes();
   const rt = getRuntime(cfg('k'));
   const before = await rt.installId(bytes);
-  await rt.logout(); // the modal is closed, nothing is mounted
+  await rt.logout();
   assert.notEqual(await rt.installId(bytes), before);
 });
 
@@ -137,14 +138,12 @@ test('swapping identity does not clear the wasSignedIn flag — that is not a lo
   store.set(wasSignedInKey('k'), '1');
 
   const rt1 = getRuntime({ ...cfg('k'), storage, identity: { getToken: () => 't1' } });
-  assert.ok(rt1); // constructed against the seeded storage above
+  assert.ok(rt1);
   getRuntime({ ...cfg('k'), storage, identity: { getToken: () => 't2' } });
 
   assert.equal(store.get(wasSignedInKey('k')), '1', 'the flag must survive an identity swap');
 });
 
-// Two widgets share a runtime but not their WebViews, and `random.ts` allows one
-// request in flight per source, so a source captured at build time is often busy.
 test('single-flight covers the second caller, and a busy source is never touched', async () => {
   __resetRuntimes();
   // No real timers: an unanswered request would arm a 2s timeout that outlives the test.
@@ -198,7 +197,7 @@ test("a later mint, after logout, invokes that call's own source rather than an 
   assert.equal(xCalls, 1);
   assert.equal(idX, toBase64Url(new Uint8Array(16).fill(1)));
 
-  await rt.logout(); // clears the install-id memo; a fresh mint is due next call
+  await rt.logout();
 
   const y = createRandomSource({
     inject: () => {},
@@ -220,7 +219,6 @@ test("a later mint, after logout, invokes that call's own source rather than an 
   );
 });
 
-// Without `identity.clear()` the previous user's `wasSignedIn` strands every later boot.
 test('logout clears identity too, not only the install id', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -247,7 +245,6 @@ test('logout clears identity too, not only the install id', async () => {
   assert.equal(store.get(wasSignedInKey('k')), undefined);
 });
 
-// Dropping the memo before awaiting the rotation lets a mint re-memoise the old id.
 test('an installId() landing mid-logout waits for the rotation instead of reading past it', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -260,7 +257,6 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
     setItem: async (k: string, v: string) => {
       store.set(k, v);
     },
-    // AsyncStorage is a real round trip to native, so this window is not hypothetical.
     removeItem: async (k: string) => {
       await landed;
       store.delete(k);
@@ -282,9 +278,6 @@ test('an installId() landing mid-logout waits for the rotation instead of readin
   );
 });
 
-// A `rotation` left pointing at a rejected promise makes every later `installId()`
-// re-throw a dead failure, a permanent error screen. Two tests, one per line of code
-// that prevents it.
 const failingRotation = () => {
   const store = new Map<string, string>();
   let failRemove = true;
@@ -306,7 +299,6 @@ const failingRotation = () => {
   };
 };
 
-// Fails without the `.catch()`, where a mint parked before the `finally` inherits the failure.
 test('a mint landing DURING a failing logout does not inherit the failure', async () => {
   __resetRuntimes();
   const { storage } = failingRotation();
@@ -324,7 +316,6 @@ test('a mint landing DURING a failing logout does not inherit the failure', asyn
   );
 });
 
-// The other half: every later mint re-throws a failure that is over.
 test('a removeItem failure during logout does not poison every later install-id mint', async () => {
   __resetRuntimes();
   const { storage, heal } = failingRotation();
@@ -333,14 +324,13 @@ test('a removeItem failure during logout does not poison every later install-id 
 
   await assert.rejects(rt.logout(), /disk full/);
 
-  heal(); // the disk is fine again
+  heal();
   assert.equal(await rt.installId(bytes), before);
   // Second and third too: a one-shot rejection would satisfy a single retry by accident.
   assert.equal(await rt.installId(bytes), before);
   assert.equal(await rt.installId(bytes), before);
 });
 
-// Without `inFlight`, a write blocked in `setItem` commits after `removeItem`.
 test('a pre-logout install-id write cannot land after the rotation deleted it', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -373,7 +363,6 @@ test('a pre-logout install-id write cannot land after the rotation deleted it', 
   assert.deepEqual(order, ['setItem', 'removeItem'], 'the delete must come last');
   assert.equal(store.size, 0, 'nothing may survive the rotation');
 
-  // The next widget mints a new id rather than reading the previous user's write back.
   const after = await rt.installId(bytes);
   assert.notEqual(after, await minting);
 });
@@ -406,11 +395,10 @@ test('a rejecting pre-logout mint still lets the rotation through (settle, not s
 
   const loggingOut = rt.logout();
   failWrite(new Error('disk full'));
-  await loggingOut; // must not hang, and must not inherit the failure
+  await loggingOut;
   assert.ok(await rt.installId(bytes));
 });
 
-// Reading `runtime.identity` only at the end leaves a mid-rotation swap outside the logout.
 test('a provider swapped in mid-logout is inside the logout, and so is the old one', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -449,7 +437,6 @@ test('a provider swapped in mid-logout is inside the logout, and so is the old o
   assert.equal(secondCleared, 1, 'and the one swapped in while it ran');
 });
 
-// A rejecting `clear()` that skips the reload leaves the WebView on a pre-logout token.
 test('a rejecting clear() still reloads every subscriber, and still rejects', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -473,8 +460,6 @@ test('a rejecting clear() still reloads every subscriber, and still rejects', as
   assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout token');
 });
 
-// Nulling `inFlight` unconditionally lets a prior mint erase a post-logout memo, so
-// the next caller mints a second id and two surfaces get two anonymous users.
 test('a prior mint settling after logout does not erase the post-logout memo', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -521,9 +506,6 @@ test('a prior mint settling after logout does not erase the post-logout memo', a
   assert.equal(await rt.installId(bytes), await postLogout, 'one post-logout id, not two');
 });
 
-// The logout generation is shared, not per-provider: as a local, a provider discarded
-// by an identity swap never sees the logout and writes `wasSignedIn` back onto a
-// logged-out install, stranding every later boot on a handshake_timeout screen.
 test('a provider discarded by an identity swap is still inside a later logout', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -563,8 +545,6 @@ test('a provider discarded by an identity swap is still inside a later logout', 
   );
 });
 
-// A `removeItem` rejection propagating straight out leaves the identity cache, the
-// marker and every WebView session alive through the logout.
 test('a rejecting rotation still clears identity, still reloads, and still rejects', async () => {
   __resetRuntimes();
   const store = new Map<string, string>();
@@ -590,4 +570,69 @@ test('a rejecting rotation still clears identity, still reloads, and still rejec
   await assert.rejects(rt.logout(), /install id removal failed/);
   assert.equal(reloads, 1, 'the widget must not keep running on the pre-logout session');
   assert.equal(store.get(wasSignedInKey('key-6')), undefined, 'identity must be cleared anyway');
+});
+
+test('installRef() is null before any id exists, and never mints one', async () => {
+  __resetRuntimes();
+  const c = cfg('ref-null');
+  const rt = getRuntime(c);
+  assert.equal(await rt.installRef(), null);
+  assert.equal(await c.storage.getItem('mentiora.installId.ref-null'), null);
+});
+
+test('installRef() hashes the stored id', async () => {
+  __resetRuntimes();
+  const rt = getRuntime(cfg('ref-hash'));
+  const id = await rt.installId(bytes);
+  assert.equal(await rt.installRef(), installRefOf(id));
+});
+
+test('onInstallRefChange: the value on mint, null on logout, nothing on a plain read', async () => {
+  __resetRuntimes();
+  const rt = getRuntime(cfg('ref-events'));
+  const seen: Array<string | null> = [];
+  rt.onInstallRefChange((ref) => seen.push(ref));
+  const first = await rt.installId(bytes);
+  await rt.installId(bytes);
+  await rt.logout();
+  const second = await rt.installId(bytes);
+  assert.deepEqual(seen, [installRefOf(first), null, installRefOf(second)]);
+});
+
+test('a failed rotation emits no null: the old id is still there', async () => {
+  __resetRuntimes();
+  const c = cfg('ref-fail');
+  const rt = getRuntime({
+    ...c,
+    storage: {
+      ...c.storage,
+      removeItem: async () => {
+        throw new Error('disk');
+      },
+    },
+  });
+  const seen: Array<string | null> = [];
+  rt.onInstallRefChange((ref) => seen.push(ref));
+  await rt.installId(bytes);
+  await assert.rejects(rt.logout());
+  assert.equal(seen.length, 1);
+});
+
+test('installRef() waits for an in-flight rotation instead of reading the old id', async () => {
+  __resetRuntimes();
+  const rt = getRuntime(cfg('ref-rotation'));
+  await rt.installId(bytes);
+  const logout = rt.logout();
+  assert.equal(await rt.installRef(), null);
+  await logout;
+});
+
+test('an unsubscribed listener hears nothing', async () => {
+  __resetRuntimes();
+  const rt = getRuntime(cfg('ref-unsub'));
+  const seen: Array<string | null> = [];
+  const off = rt.onInstallRefChange((ref) => seen.push(ref));
+  off();
+  await rt.installId(bytes);
+  assert.deepEqual(seen, []);
 });

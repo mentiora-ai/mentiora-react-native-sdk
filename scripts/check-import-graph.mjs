@@ -1,7 +1,5 @@
-// Asserts every module a built `lib/` eagerly imports resolves from a consumer's
-// install: a runtime import missing from `peerDependencies`, or an eager import of
-// an optional peer, passes every other check. ESM build only, so a lazily
-// `require()`d optional peer is correctly not flagged.
+// Every eager import in `lib/` must resolve from a consumer install; nothing else catches a
+// missing peer or an eagerly imported optional one. Lazy `require()`s are not flagged.
 
 import { readFileSync } from 'node:fs';
 import { glob } from 'node:fs/promises';

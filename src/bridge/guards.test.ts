@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isNotification, isRequest, isResponse, parseInbound } from './guards.js';
+import { isUnreadCountParams, parseInbound } from './guards.js';
 
 test('parseInbound rejects non-JSON and non-2.0 envelopes', () => {
   assert.equal(parseInbound('not json'), null);
@@ -9,40 +9,55 @@ test('parseInbound rejects non-JSON and non-2.0 envelopes', () => {
 });
 
 test('a request needs a non-empty string id, a method and params', () => {
-  const ok = parseInbound('{"jsonrpc":"2.0","id":"r1","method":"mentiora/openUrl","params":{}}');
-  assert.ok(ok && isRequest(ok));
+  assert.deepEqual(
+    parseInbound('{"jsonrpc":"2.0","id":"r1","method":"mentiora/openUrl","params":{}}'),
+    { jsonrpc: '2.0', id: 'r1', method: 'mentiora/openUrl', params: {} },
+  );
   assert.equal(parseInbound('{"jsonrpc":"2.0","id":1,"method":"m","params":{}}'), null);
   assert.equal(parseInbound('{"jsonrpc":"2.0","id":"","method":"m","params":{}}'), null);
 });
 
 test('a notification has a method and no id', () => {
-  const n = parseInbound('{"jsonrpc":"2.0","method":"mentiora/ready","params":{}}');
-  assert.ok(n && isNotification(n));
+  assert.deepEqual(parseInbound('{"jsonrpc":"2.0","method":"mentiora/ready","params":{}}'), {
+    jsonrpc: '2.0',
+    method: 'mentiora/ready',
+    params: {},
+  });
 });
 
 test('a response has an id and result or error, never a method', () => {
-  const r = parseInbound('{"jsonrpc":"2.0","id":"h2","error":{"code":-32601,"message":"x"}}');
-  assert.ok(r && isResponse(r));
+  assert.deepEqual(
+    parseInbound('{"jsonrpc":"2.0","id":"h2","error":{"code":-32601,"message":"x"}}'),
+    { jsonrpc: '2.0', id: 'h2', error: { code: -32601, message: 'x' }, params: {} },
+  );
+  assert.equal(parseInbound('{"jsonrpc":"2.0","id":"h2","method":"m","result":{}}'), null);
+  assert.equal(parseInbound('{"jsonrpc":"2.0","id":"h2","result":{},"error":{}}'), null);
 });
 
 test('missing params on a request reads as {} rather than dropping the message', () => {
-  const r = parseInbound('{"jsonrpc":"2.0","id":"r1","method":"m"}');
-  assert.ok(r && isRequest(r));
-  assert.deepEqual(r.params, {});
+  assert.deepEqual(parseInbound('{"jsonrpc":"2.0","id":"r1","method":"m"}'), {
+    jsonrpc: '2.0',
+    id: 'r1',
+    method: 'm',
+    params: {},
+  });
+  assert.equal(parseInbound('{"jsonrpc":"2.0","id":"r1","method":"m","params":[]}'), null);
 });
 
 test("a response's params.sessionKey survives parseInbound", () => {
   const r = parseInbound(
     '{"jsonrpc":"2.0","id":"h2","result":{},"params":{"sessionKey":"sk-9f2a1b7e3d4c"}}',
   );
-  assert.ok(r && isResponse(r));
-  assert.deepEqual(r.params, { sessionKey: 'sk-9f2a1b7e3d4c' });
+  assert.deepEqual(r?.params, { sessionKey: 'sk-9f2a1b7e3d4c' });
 });
 
 test('missing params on a response reads as {} rather than dropping the message', () => {
-  const r = parseInbound('{"jsonrpc":"2.0","id":"h2","result":{}}');
-  assert.ok(r && isResponse(r));
-  assert.deepEqual(r.params, {});
+  assert.deepEqual(parseInbound('{"jsonrpc":"2.0","id":"h2","result":{}}'), {
+    jsonrpc: '2.0',
+    id: 'h2',
+    result: {},
+    params: {},
+  });
 });
 
 test('an error response rejects a non-integer code', () => {
@@ -50,4 +65,13 @@ test('an error response rejects a non-integer code', () => {
     parseInbound('{"jsonrpc":"2.0","id":"h2","error":{"code":-32601.5,"message":"x"}}'),
     null,
   );
+});
+
+test('unreadCountChanged takes an integer count from 0 to 100, the protocol cap', () => {
+  assert.ok(isUnreadCountParams({ count: 0 }));
+  assert.ok(isUnreadCountParams({ count: 100 }));
+  for (const count of [-1, 101, 1.5, '2', null, undefined, Number.NaN]) {
+    assert.ok(!isUnreadCountParams({ count }), `count=${String(count)}`);
+  }
+  assert.ok(!isUnreadCountParams({}));
 });

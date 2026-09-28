@@ -1,0 +1,23 @@
+{
+  "name": "unread-count",
+  "protocolVersion": 1,
+  "role": "page",
+  "steps": [
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/unreadCountChanged",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c", "count": 2 }
+      }
+    },
+    {
+      "direction": "page->host",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "mentiora/unreadCountChanged",
+        "params": { "sessionKey": "sk-9f2a1b7e3d4c", "count": 0 }
+      }
+    }
+  ]
+}

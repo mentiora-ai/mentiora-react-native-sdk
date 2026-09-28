@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   createIdentityProvider,
-  decodeExp,
+  decodeClaims,
   IdentityUnavailable,
   wasSignedInKey,
 } from './identity.js';
@@ -12,7 +12,6 @@ const b64url = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64ur
 const jwt = (exp: number, iat = exp - 3600) =>
   `${b64url({ alg: 'HS256' })}.${b64url({ exp, iat })}.sig`;
 
-// Every provider needs storage for the wasSignedIn flag. It never holds the token.
 const memory = () => {
   const m = new Map<string, string>();
   const storage: MentioraStorage = {
@@ -29,10 +28,10 @@ const memory = () => {
 const make = (deps: Partial<Parameters<typeof createIdentityProvider>[0]> = {}) =>
   createIdentityProvider({ embedKey: 'k', storage: memory().storage, ...deps });
 
-test('decodeExp reads exp without verifying, and survives junk', () => {
-  assert.equal(decodeExp(jwt(1800000000)), 1800000000);
-  assert.equal(decodeExp('not.a.jwt'), null);
-  assert.equal(decodeExp(''), null);
+test('decodeClaims reads exp and iat without verifying, and survives junk', () => {
+  assert.deepEqual(decodeClaims(jwt(1800000000)), { exp: 1800000000, iat: 1800000000 - 3600 });
+  assert.deepEqual(decodeClaims('not.a.jwt'), { exp: null, iat: null });
+  assert.deepEqual(decodeClaims(''), { exp: null, iat: null });
 });
 
 test('no identity configured means anonymous, not an error', async () => {
@@ -216,7 +215,7 @@ test('a token with no readable exp is returned but never cached', async () => {
   assert.equal(hits, 2, 'no expiry means no safe reuse window');
 });
 
-test('warns in dev when exp - iat exceeds 3600s, because the mint will reject it', async () => {
+test('warns in dev when exp - iat exceeds 3600s, because Mentiora will reject it', async () => {
   const warnings: string[] = [];
   const long = jwt(2_000_003_601, 2_000_000_000);
   const p = make({ identity: { getToken: () => long }, warn: (m) => warnings.push(m) });
@@ -243,8 +242,6 @@ test('a failed wasSignedIn flag write does not fail an otherwise-successful boot
   );
 });
 
-// A token must not outlive a logout, and must never touch storage.
-
 test('clear drops the cached token too, so the next user never inherits it', async () => {
   // Only the fetcher shape has a reuse window; `refresh()` on `getToken` always re-calls.
   const now = 1_000_000_000_000;
@@ -261,7 +258,7 @@ test('clear drops the cached token too, so the next user never inherits it', asy
     }) as typeof fetch,
   });
   await p.initial();
-  await p.refresh(); // an hour left, far outside the 5-minute floor: served from cache
+  await p.refresh();
   assert.equal(hits, 1, 'precondition: there IS a live cache to clear');
 
   await p.clear();
@@ -294,9 +291,6 @@ test('the only value ever written under the wasSignedIn key is the flag, never t
   assert.ok(![...m.values()].includes(token), 'the token must never reach storage');
 });
 
-// `mintToken` writes `cache` and the marker behind a generation check. Without it,
-// a mint in flight when `clear()` runs puts both back and the next boot reuses a
-// pre-logout token.
 test('a mint that resumes after clear() repopulates neither the cache nor the marker', async () => {
   const { m, storage } = memory();
   let calls = 0;
@@ -317,7 +311,7 @@ test('a mint that resumes after clear() repopulates neither the cache nor the ma
   });
 
   const inFlight = p.refresh(); // parked inside getToken
-  await p.clear(); // the user logs out while it is parked
+  await p.clear();
   release(jwt(2000000000));
 
   await assert.rejects(inFlight, IdentityUnavailable);
@@ -374,8 +368,6 @@ test('an uninterrupted mint still caches and still writes the marker', async () 
   assert.equal(calls, 1, 'the cache still works when no logout intervened');
 });
 
-// `initial()` must read the marker before returning anonymous on `!identity`, or a
-// signed-in install restarting before identity is configured is demoted.
 test('a signed-in install with no identity configured fails the handshake', async () => {
   const { m, storage } = memory();
   m.set(wasSignedInKey('k'), '1');
@@ -389,8 +381,6 @@ test('an install that was never signed in still boots anonymous with no identity
   assert.equal(await p.initial(), undefined);
 });
 
-// The post-`retry` `cleared()` check is what keeps `cache` empty across the `await
-// storage.setItem` window, where a concurrent `refresh()` takes `isFresh`.
 test('a mint resuming after clear() never publishes its token, not even transiently', async () => {
   const now = 1_000_000_000_000;
   const tokenA = jwt(now / 1000 + 3600);
@@ -436,7 +426,7 @@ test('a mint resuming after clear() never publishes its token, not even transien
   const inFlight = p.refresh(); // parked inside fetchImpl
   inFlight.catch(() => undefined);
   await new Promise((r) => setImmediate(r));
-  await p.clear(); // the user logs out while it is parked
+  await p.clear();
   releaseFetch();
   await new Promise((r) => setImmediate(r));
 
@@ -450,8 +440,6 @@ test('a mint resuming after clear() never publishes its token, not even transien
   await assert.rejects(inFlight, IdentityUnavailable);
 });
 
-// A stale mint's undo is scoped to its own generation; unscoped it wipes a newer
-// mint's marker and token, leaving a signed-in install a boot failure demotes.
 test("a stale mint's undo cannot erase a newer mint's marker or cache", async () => {
   const now = 1_000_000_000_000;
   const tokenA = jwt(now / 1000 + 3600);
@@ -493,7 +481,7 @@ test("a stale mint's undo cannot erase a newer mint's marker or cache", async ()
   stale.catch(() => undefined);
   await new Promise((r) => setImmediate(r));
 
-  await p.clear(); // logout
+  await p.clear();
   await p.refresh(); // the user signs back in; this mint completes in full
   assert.equal(m.get(wasSignedInKey('k')), '1', 'precondition: the new mint marked the install');
 
@@ -506,9 +494,6 @@ test("a stale mint's undo cannot erase a newer mint's marker or cache", async ()
   assert.equal(hits, before, "the newer mint's cache must survive too");
 });
 
-// `retry` bounds the delays between attempts, never an attempt itself. Without a deadline
-// an endpoint that accepts the connection and never answers leaves boot pending forever,
-// surfacing as neither `identityError` nor `handshake_timeout`.
 test('a fetch that never settles is aborted on the policy budget rather than hanging boot', async () => {
   let aborted = false;
   const provider = createIdentityProvider({

@@ -8,10 +8,7 @@ const config = getDefaultConfig(__dirname);
 
 config.watchFolders = [...config.watchFolders, root];
 
-// Watching the whole root means the SDK's own build outputs look like source edits:
-// `bun run build` writes `lib/`, `test:core` writes `lib-test/`, and each run made Metro
-// rebundle and reload the running app mid-use. Only `src/` is ever resolved from the root,
-// so the rest is noise.
+// Otherwise the SDK's build output (`lib/`, `lib-test/`) reloads the running app.
 const IGNORED_IN_ROOT = ['lib', 'lib-test', 'dist', 'coverage', '.git', '.specs'];
 const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 config.resolver.blockList = [

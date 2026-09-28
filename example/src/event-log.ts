@@ -11,8 +11,7 @@ const listeners = new Set<() => void>();
 let nextId = 0;
 let previousAt: number | undefined;
 
-/** Milliseconds since the entry above. `open()` to `ready` is the widget's boot cost, which
- *  is the whole question when deciding whether a cold WebView is worth preloading. */
+// Prefixes ms since the previous entry; `open()` to `ready` is the widget's boot cost.
 const push = (text: string): void => {
   const at = Date.now();
   const delta = previousAt === undefined ? '' : `+${String(at - previousAt)}ms `;

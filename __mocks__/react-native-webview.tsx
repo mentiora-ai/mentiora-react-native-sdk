@@ -33,7 +33,6 @@ export type MockWebViewRef = {
 
 const instances: MockWebViewRef[] = [];
 
-/** Every mounted mock WebView, in mount order. */
 export const __webViews = (): readonly MockWebViewRef[] => instances;
 
 export const __lastWebView = (): MockWebViewRef => {

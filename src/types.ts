@@ -8,8 +8,7 @@ export interface MentioraIdentityCallback {
   getToken: () => string | Promise<string>;
 }
 
-/** Let the SDK fetch identity tokens: it reads the JWT's `exp` without
- *  verifying, caches the token in memory and refreshes before expiry. */
+/** The SDK fetches the token, caches it in memory and refreshes before the JWT's `exp`. */
 export interface MentioraIdentityFetcher {
   endpoint: string;
   headers?: () => Record<string, string> | Promise<Record<string, string>>;
@@ -31,16 +30,17 @@ export type MentioraEvent =
   | { type: 'identityError'; reason: string }
   | { type: 'openUrl'; url: string }
   | { type: 'error'; code: MentioraErrorCode }
-  /** The install id lives in memory, so every launch is a new anonymous user.
-   *  Emitted once per embed key. */
-  | { type: 'storageUnavailable'; reason: StorageUnavailableReason };
+  /** Install id is memory-only: every launch is a new anonymous user. Once per embed key. */
+  | { type: 'storageUnavailable'; reason: StorageUnavailableReason }
+  /** Unread replies, 0–100. Only sent once the page has loaded (after the first open). */
+  | { type: 'unreadCountChanged'; count: number }
+  /** Anonymous `installRef` created, or deleted by `logout()` (`null`). Re-key your device token. */
+  | { type: 'installRefChanged'; installRef: string | null };
 
-/** What `renderError` receives: the same actions the built-in Retry and Dismiss run. */
 export type MentioraErrorRenderProps = {
   code: MentioraErrorCode;
-  /** A fresh load of the page. */
   retry: () => void;
-  /** Stops showing the widget and emits `close`, which closes the `Mentiora.open()` overlay. */
+  /** Emits `close`, which closes the `Mentiora.open()` overlay. */
   dismiss: () => void;
 };
 
@@ -52,11 +52,8 @@ export interface MentioraStorage {
 }
 
 export interface MentioraConfig {
-  /**
-   * The hosted-page URL from the Mentiora install snippet, e.g.
-   * `https://widget.acme.mentiora.ai/h/rn/pk_wgt_…`. Anything else throws, from
-   * `Mentiora.configure()` or on the widget's first render.
-   */
+  /** Hosted-page URL from the install snippet (`https://widget.acme.mentiora.ai/h/rn/pk_wgt_…`);
+   *  anything else throws. */
   widgetUrl: string;
   /** Omitted means anonymous chat. */
   identity?: MentioraIdentity;
@@ -66,20 +63,12 @@ export interface MentioraConfig {
   storage?: MentioraStorage;
   /** Overrides the error screen's copy; an `undefined` key keeps its default. */
   strings?: Partial<MentioraStrings>;
-  /**
-   * Replaces the built-in error screen, e.g. to match the app's own design. It fills the
-   * widget's area, so it must offer a way out: without `dismiss` the user is stuck on it.
-   * `strings` does not apply to it. `onEvent` still reports the `error`.
-   */
+  /** Replaces the built-in error screen. Must offer `dismiss`, or the user is stuck on it. */
   renderError?: (props: MentioraErrorRenderProps) => React.ReactNode;
 }
 
 export type MentioraWidgetProps = MentioraConfig & {
-  /**
-   * `false` parks the widget: it stays mounted and keeps its page, but stops claiming
-   * the Android back button and is hidden from screen readers. `<MentioraHost />` sets
-   * it to keep the page warm across close/open. Inline hosts can set it for a widget in
-   * a tab that is not on screen; leaving it out means visible.
-   */
+  /** `false` keeps the page loaded but releases Android back and hides it from screen
+   *  readers, e.g. for an off-screen tab. Default `true`. */
   visible?: boolean;
 };

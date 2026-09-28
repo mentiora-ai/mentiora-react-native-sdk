@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createRandomSource, RANDOM_REPLY_TAG, toBase64Url } from './random.js';
+import { createRandomSource, RANDOM_REPLY_TAG } from './random.js';
 
 // Read back out of the injected script, so dropping the nonce entirely fails here.
 const nonceOf = (script: string): string => {
@@ -65,11 +65,6 @@ test('rejects after the 2s bound when no reply arrives', async () => {
   await assert.rejects(p, /timed out/);
 });
 
-test('toBase64Url emits no +, / or = padding', () => {
-  const s = toBase64Url(new Uint8Array([251, 255, 254, 0]));
-  assert.ok(!/[+/=]/.test(s));
-});
-
 test('a reply with the wrong number of bytes rejects instead of resolving short', async () => {
   let script = '';
   const src = createRandomSource({
@@ -124,8 +119,6 @@ test('a throwing globalCrypto rejects instead of throwing synchronously', async 
   await assert.rejects(src.bytes(16), /broken polyfill/);
 });
 
-// A reset must invalidate parked random-bytes resolvers too: one left by a replaced
-// document holds the single in-flight slot for 2s and rejects the new `initialize`.
 test('reset frees the single-in-flight slot for the replacement page', async () => {
   let cleared = 0;
   let script = '';
@@ -143,7 +136,6 @@ test('reset frees the single-in-flight slot for the replacement page', async () 
   await assert.rejects(parked, /superseded/);
   assert.equal(cleared, 1, "the dead request's 2s timer must not outlive it");
 
-  // The next page may ask, rather than hitting "already in flight".
   const fresh = src.bytes(16);
   assert.equal(src.acceptReply(reply(script, { bytes: Array(16).fill(3) })), true);
   assert.equal((await fresh)[0], 3);
@@ -163,8 +155,6 @@ test('reset with nothing parked is a no-op, not a spurious rejection', async () 
   assert.equal((await src.bytes(16))[0], 1);
 });
 
-// Authenticated by nonce, not by the module-constant `obj.tag`: anything reaching
-// `ReactNativeWebView.postMessage` could otherwise choose the session key and install id.
 test('a tagged reply with a foreign nonce neither resolves nor consumes the request', async () => {
   let script = '';
   let cleared = 0;

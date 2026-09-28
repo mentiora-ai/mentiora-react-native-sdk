@@ -7,25 +7,28 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { canSignIn, identityFetcher, isConfigured, setCredentials, widgetUrl } from '../src/config';
 import { EventLog } from '../src/EventLog';
 import { note, record } from '../src/event-log';
+import { showUnreadBadge } from '../src/push';
 import {
   armBootDeadline,
   claimLaunch,
   disarmBootDeadline,
+  forgetSignIn,
+  recallSignIn,
+  rememberSignIn,
   setPrincipal,
   usePrincipal,
 } from '../src/session';
 
-/** Pass the module-scope `identityFetcher` or `undefined`, never a fresh literal: the SDK
- *  compares `identity` by reference and drops its cached token on change. */
 const configure = (identity: typeof identityFetcher | undefined): void => {
   Mentiora.configure({
     widgetUrl,
     identity,
     onEvent: (event) => {
       record(event);
+      if (event.type === 'unreadCountChanged') showUnreadBadge(event.count);
+      // A signed-in install got no identity: let the user sign in again or sign out.
+      if (event.type === 'identityError') Mentiora.close();
       if (event.type === 'ready' || event.type === 'close' || event.type === 'error') {
-        // `ready` also retires the deadline for good: from here the page is warm, so a
-        // later open has no `ready` to wait for.
         disarmBootDeadline(event.type === 'ready');
       }
     },
@@ -33,8 +36,6 @@ const configure = (identity: typeof identityFetcher | undefined): void => {
 };
 
 const present = async (): Promise<void> => {
-  // Logged here, not in the button handler: the launch auto-open goes through this path
-  // too, and without it the cold boot has nothing to measure against.
   note('open()');
   armBootDeadline(() => {
     note('page did not report ready — closing so the app stays reachable');
@@ -53,9 +54,18 @@ export default function HomeScreen(): React.JSX.Element {
   // A passive effect runs after the layout effect that registers `<MentioraHost />`.
   useEffect(() => {
     if (!isConfigured || !claimLaunch()) return;
-    configure(undefined);
-    void present().catch((error: unknown) => {
-      // A plain line: an SDK `identityError` would send a failed `open()` down the wrong trail.
+    void (async () => {
+      const user = canSignIn ? await recallSignIn() : null;
+      if (user) {
+        note(`restored sign-in as ${user.sub}`);
+        setCredentials(user.sub, user.name);
+        configure(identityFetcher);
+        setPrincipal(user.sub);
+      } else {
+        configure(undefined);
+      }
+      await present();
+    })().catch((error: unknown) => {
       note(`open failed: ${String(error)}`);
     });
   }, []);
@@ -79,14 +89,15 @@ export default function HomeScreen(): React.JSX.Element {
     [guard],
   );
 
-  /** Does not call `logout()`: that clears the `wasSignedIn` marker, and without it a
-   *  failed token mint boots anonymous silently. */
+  /** No `logout()`: it clears the signed-in marker, and a failed mint would then boot
+   *  anonymous silently. */
   const signIn = useCallback(() => {
     void guard('signIn', async () => {
       note(`sign in as ${sub.trim()}`);
       setCredentials(sub.trim(), name.trim());
       configure(identityFetcher);
       setPrincipal(sub.trim());
+      await rememberSignIn({ sub: sub.trim(), name: name.trim() });
     });
   }, [guard, sub, name]);
 
@@ -95,6 +106,7 @@ export default function HomeScreen(): React.JSX.Element {
       note('sign out');
       configure(undefined);
       await Mentiora.logout();
+      await forgetSignIn();
       setCredentials('', '');
       setPrincipal('anonymous');
     });

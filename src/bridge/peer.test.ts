@@ -12,6 +12,7 @@ const result = {
 const makePeer = () => {
   const sent: string[] = [];
   const warnings: string[] = [];
+  const counts: number[] = [];
   const peer = createHostPeer({
     send: (raw) => sent.push(raw),
     warn: (m) => warnings.push(m),
@@ -23,9 +24,10 @@ const makePeer = () => {
       onClose: () => {},
       onIdentityError: () => {},
       onBackHandling: () => {},
+      onUnreadCountChanged: (count) => counts.push(count),
     },
   });
-  return { peer, sent, warnings };
+  return { peer, sent, warnings, counts };
 };
 const lastSent = (sent: string[]) => JSON.parse(sent[sent.length - 1] as string);
 
@@ -162,6 +164,7 @@ test('a handler that throws produces -32603', async () => {
       onClose: () => {},
       onIdentityError: () => {},
       onBackHandling: () => {},
+      onUnreadCountChanged: () => {},
     },
   });
   await peer.receive(
@@ -226,6 +229,7 @@ test('two initializes racing before either handler resolves: the second gets -32
       onClose: () => {},
       onIdentityError: () => {},
       onBackHandling: () => {},
+      onUnreadCountChanged: () => {},
     },
   });
   const msg =
@@ -257,6 +261,7 @@ test('work from a superseded load generation neither sends nor mutates', async (
       onClose: () => {},
       onIdentityError: () => {},
       onBackHandling: () => {},
+      onUnreadCountChanged: () => {},
     },
   });
   const inFlight = peer.receive(
@@ -269,8 +274,6 @@ test('work from a superseded load generation neither sends nor mutates', async (
   assert.equal(peer.sessionKey(), null, 'nor overwrite the new session');
 });
 
-// `-32003` and `-32002` are required answers, unreachable while every handler
-// rejection collapses to `-32603`, so the code rides on the throw.
 const peerThatThrows = (e: unknown) => {
   const sent: string[] = [];
   const peer = createHostPeer({
@@ -287,6 +290,7 @@ const peerThatThrows = (e: unknown) => {
       onClose: () => {},
       onIdentityError: () => {},
       onBackHandling: () => {},
+      onUnreadCountChanged: () => {},
     },
   });
   return { peer, sent };
@@ -325,8 +329,6 @@ test('any other throw is still -32603 with the generic message', async () => {
   assert.deepEqual(lastSent(sent).error, { code: -32603, message: 'Internal error' });
 });
 
-// The session-key check also covers page->host responses, which have no other guard.
-// Without these two, `if (false)` in its place leaves the suite green.
 test('a page-sent response with a wrong session key is rejected with -32001', async () => {
   const { peer, sent } = makePeer();
   await peer.receive(
@@ -370,4 +372,55 @@ test('sendHide sends nothing before a handshake, then a keyed notification', asy
     method: 'mentiora/hide',
     params: { sessionKey: 'sk-test' },
   });
+});
+
+const INIT =
+  '{"jsonrpc":"2.0","id":"r1","method":"mentiora/initialize","params":{"protocolVersion":1}}';
+
+test('unreadCountChanged reaches its handler; a malformed count is dropped', async () => {
+  const { peer, counts, warnings } = makePeer();
+  await peer.receive(INIT);
+  await peer.receive(
+    '{"jsonrpc":"2.0","method":"mentiora/unreadCountChanged","params":{"sessionKey":"sk-test","count":3}}',
+  );
+  await peer.receive(
+    '{"jsonrpc":"2.0","method":"mentiora/unreadCountChanged","params":{"sessionKey":"sk-test","count":-1}}',
+  );
+  assert.deepEqual(counts, [3]);
+  assert.equal(warnings.length, 1);
+});
+
+test('sendOpen sends nothing before a handshake, then a keyed notification', async () => {
+  const { peer, sent } = makePeer();
+  peer.sendOpen('thr_abc');
+  assert.equal(sent.length, 0);
+  await peer.receive(INIT);
+  peer.sendOpen('thr_abc');
+  assert.deepEqual(lastSent(sent), {
+    jsonrpc: '2.0',
+    method: 'mentiora/open',
+    params: { sessionKey: 'sk-test', threadId: 'thr_abc' },
+  });
+});
+
+test('an initialize handler BridgeError answers with its own code, so the page can tell sign-in from a version mismatch', async () => {
+  const sent: string[] = [];
+  const peer = createHostPeer({
+    send: (raw) => sent.push(raw),
+    handlers: {
+      initialize: async () => {
+        throw new BridgeError(-32002, 'Identity unavailable');
+      },
+      refreshIdentity: async () => ({ identityToken: 'jwt' }),
+      openUrl: async () => {},
+      onReady: () => {},
+      onClose: () => {},
+      onIdentityError: () => {},
+      onBackHandling: () => {},
+      onUnreadCountChanged: () => {},
+    },
+  });
+  await peer.receive(INIT);
+  assert.deepEqual(lastSent(sent).error, { code: -32002, message: 'Identity unavailable' });
+  assert.equal(peer.sessionKey(), null);
 });

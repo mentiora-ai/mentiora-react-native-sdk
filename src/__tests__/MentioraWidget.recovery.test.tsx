@@ -1,19 +1,14 @@
-// The recovery coordinator: network ladder, crash ladder, handshake watchdog, and the rule
-// keeping one incident out of two of them. `advanceTimersByTimeAsync` only — the synchronous
-// form fires a timer's callback without draining the microtasks its own awaits sit on.
+// `advanceTimersByTimeAsync` only: the sync form fires a timer's callback without
+// draining the microtasks its awaits sit on.
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type React from 'react';
 import { StrictMode, Suspense } from 'react';
 import { Text } from 'react-native';
 import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
 import { MentioraWidget } from '../MentioraWidget';
-import { RANDOM_REPLY_TAG } from '../random';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
-
-const ORIGIN = 'https://w.x.ai';
-const KEY = 'pk_wgt_a';
-const WIDGET_URL = `${ORIGIN}/h/rn/${KEY}`;
+import { answerLastRandom, initialize, KEY, randomScripts, sent, WIDGET_URL } from './helpers';
 
 beforeEach(() => {
   jest.useFakeTimers();
@@ -27,42 +22,6 @@ afterEach(() => {
 
 // A bare timer advance is outside `act()`, and the crash path calls `setState` inside one.
 const advance = (ms: number) => act(async () => jest.advanceTimersByTimeAsync(ms));
-
-const sent = (): Record<string, unknown>[] =>
-  (__lastWebView().injectJavaScript as jest.Mock).mock.calls.flatMap(([script]: [string]) => {
-    const m = /window\.mentioraHost\.receive\((.*)\);\s*true;\s*$/s.exec(script);
-    return m ? [JSON.parse(JSON.parse(m[1] as string) as string) as Record<string, unknown>] : [];
-  });
-
-// Random-bytes requests, newest last, with the nonce a reply must echo to count as ours.
-const randomScripts = (): string[] =>
-  (__lastWebView().injectJavaScript as jest.Mock).mock.calls
-    .map(([script]: [string]) => script)
-    .filter((script: string) => script.includes(RANDOM_REPLY_TAG));
-
-const answerLastRandom = (el: ReturnType<typeof screen.getByTestId>, fill: number) => {
-  const script = randomScripts().at(-1);
-  if (script === undefined) throw new Error('no random request outstanding');
-  const m = /,k="([^"]+)"/.exec(script);
-  if (!m) throw new Error('the injected random script carries no nonce');
-  return fireEvent(el, 'message', {
-    nativeEvent: {
-      data: JSON.stringify({ tag: RANDOM_REPLY_TAG, nonce: m[1], bytes: Array(16).fill(fill) }),
-    },
-  });
-};
-
-const initialize = (el: ReturnType<typeof screen.getByTestId>, protocolVersion = 1) =>
-  fireEvent(el, 'message', {
-    nativeEvent: {
-      data: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'r1',
-        method: 'mentiora/initialize',
-        params: { protocolVersion },
-      }),
-    },
-  });
 
 const mount = async (onEvent?: jest.Mock) => {
   await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
@@ -87,7 +46,7 @@ test('no initialize within 8s reloads ONCE, then shows the error surface', async
   await advance(8000);
   expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
   await advance(8000);
-  expect(__lastWebView().reload).toHaveBeenCalledTimes(1); // not a ladder
+  expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
@@ -117,14 +76,13 @@ test('a rejected handshake is reloaded by the RE-ARMED watchdog, not the mount-a
   }
 });
 
-// Only this test covers the synchronous `clearWatchdogTimer()`: Jest has `globalThis.crypto`, so
-// the clear alone stops the 8s timer. Fails unless it is the handler's first statement.
+// Fails unless `clearWatchdogTimer()` is the handler's first statement.
 test('a handshake that succeeds at 7.9s is answered and NOT reloaded at 8s', async () => {
   const onEvent = jest.fn();
   const el = await mount(onEvent);
   await advance(7900); // the mount-armed watchdog has 100ms left
   await initialize(el);
-  await advance(300); // past 8000
+  await advance(300);
 
   // The handshake really landed; without this a rejected `initialize` passes too.
   expect(sent().some((m) => 'result' in m)).toBe(true);
@@ -133,10 +91,8 @@ test('a handshake that succeeds at 7.9s is answered and NOT reloaded at 8s', asy
 });
 
 test('a handshake that lands BEFORE loadEnd is not reloaded a budget later', async () => {
-  // The page can answer `initialize` before the native load-end event arrives — a cached
-  // bundle, or plain ordering jitter. `onLoadEnd` used to arm unconditionally, starting a
-  // watchdog this document's spent `initialize` can never clear, so a working widget went
-  // blank and reloaded 8s after it was already usable.
+  // `initialize` can land before native load-end (cached bundle). Arming on load-end then
+  // started a watchdog nothing clears, reloading a working widget 8s later.
   const onEvent = jest.fn();
   const el = await mount(onEvent);
   await initialize(el);
@@ -150,12 +106,11 @@ test('a handshake that lands BEFORE loadEnd is not reloaded a budget later', asy
 });
 
 test('a network-ladder reload that never re-initializes still gets caught by the watchdog', async () => {
-  // A reload whose JS never calls `initialize` again leaves no surface unless the watchdog
-  // re-arms; `onLoadEnd` does that, never the ladder's own `reload()`, silent on Android.
+  // Only `onLoadEnd` re-arms the watchdog; the ladder's own `reload()` is silent on Android.
   const onEvent = jest.fn();
   const el = await mount(onEvent);
   await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
-  await advance(2000); // the ladder's own reload fires well inside this (cap 8s, first delay ~1s)
+  await advance(2000);
   expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
   await fireEvent(screen.getByTestId('mentiora-webview'), 'loadEnd', { nativeEvent: {} });
   await advance(8000);
@@ -170,7 +125,6 @@ test('unmounting cancels the live watchdog — no reload, no error event, for a 
   // Captured before unmount: `__lastWebView()` would throw afterwards, this ref will not.
   const { reload } = __lastWebView();
   await view.unmount();
-  // Without the cleanup effect the watchdog re-arms after unmount and still reaches `onEvent`.
   await advance(20000);
   expect(reload).not.toHaveBeenCalled();
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
@@ -189,7 +143,7 @@ test('Retry recovers a dead renderer — a remount, not a reload() on the corpse
   // Android requires a dead renderer's instance be destroyed, so the repair is a fresh one.
   const deadWebView = __lastWebView();
   await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.retry }));
-  expect(__webViews()).toHaveLength(1); // the dead one unregistered, exactly one replaced it
+  expect(__webViews()).toHaveLength(1);
   expect(__webViews()[0]).not.toBe(deadWebView);
   expect(deadWebView.reload).not.toHaveBeenCalled();
 });
@@ -206,8 +160,8 @@ test('the error overlay is modal to a screen reader — both flags flip with err
     await fireEvent(el, 'error', { nativeEvent: { description: 'net' } });
     await advance(9000);
   }
-  // Read off `el`: RNTL's default queries exclude
-  // `importantForAccessibility="no-hide-descendants"`, the prop under test.
+  // RNTL's default queries exclude `importantForAccessibility="no-hide-descendants"`,
+  // the prop under test, so read it off `el`.
   expect(el.props.importantForAccessibility).toBe('no-hide-descendants');
   expect(modalOverlays()).toHaveLength(1);
 });
@@ -245,7 +199,7 @@ test('ONE incident raising two callbacks advances ONE counter', async () => {
   await fireEvent(screen.getByTestId('mentiora-webview'), 'renderProcessGone', {
     nativeEvent: { didCrash: true },
   });
-  await advance(9000); // lets the network ladder's own recovery fire and move on
+  await advance(9000);
   // Only the first terminal callback per generation picks a path, so the counter still needs
   // its full cap of 4; without the `handled` gate these same 3 incidents reach it early.
   for (let i = 0; i < 3; i++) {
@@ -279,15 +233,13 @@ test('Dismiss emits close and stops rendering the WebView, with nothing else con
   }
   await fireEvent.press(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss }));
   expect(onEvent).toHaveBeenCalledWith({ type: 'close' });
-  // `includeHiddenElements`: a WebView left under the overlay is hidden, and RNTL's
-  // default queries exclude it, so a plain `queryByTestId` reads `null` and proves nothing.
+  // A WebView under the overlay is hidden, so RNTL's default `queryByTestId` reads `null`.
   expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
   expect(screen.queryByRole('button', { name: DEFAULT_STRINGS.retry })).toBeNull();
 });
 
 type ErrorRender = NonNullable<React.ComponentProps<typeof MentioraWidget>['renderError']>;
 
-// Captures the props the host's screen was last rendered with.
 const hostErrorScreen = () => {
   const last: { props?: Parameters<ErrorRender>[0] } = {};
   const renderError: ErrorRender = (props) => {
@@ -332,8 +284,6 @@ test("renderError's retry reloads and its dismiss closes, like the built-in butt
   expect(screen.queryByTestId('mentiora-webview', { includeHiddenElements: true })).toBeNull();
 });
 
-// `clearWatchdogTimer()` disarms before the handler can fail, so the catch must re-arm: without
-// it a rejecting handler leaves the widget dead — no surface, no event, no Retry.
 test('an initialize handler that rejects ends at the error surface, not a dead widget', async () => {
   const onEvent = jest.fn();
   const store = new Map<string, string>([[`mentiora.wasSignedIn.${KEY}`, '1']]);
@@ -359,8 +309,8 @@ test('an initialize handler that rejects ends at the error surface, not a dead w
   // Past the boot ladder's sleeps, then both watchdog cycles: reload, then give up.
   await advance(20000);
 
-  // -32603 shows the handler was reached and rejected.
-  expect(sent().some((m) => (m.error as { code?: number } | undefined)?.code === -32603)).toBe(
+  // -32002 shows the handler was reached and rejected for want of an identity.
+  expect(sent().some((m) => (m.error as { code?: number } | undefined)?.code === -32002)).toBe(
     true,
   );
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
@@ -368,7 +318,6 @@ test('an initialize handler that rejects ends at the error surface, not a dead w
   expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
 });
 
-// Without `randomSource.reset()` in `advanceGeneration()` a replaced page holds the slot for 2s.
 test('a reload while the random round trip is parked does not poison the next handshake', async () => {
   const realCrypto = globalThis.crypto;
   Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
@@ -396,7 +345,7 @@ test('a reload while the random round trip is parked does not poison the next ha
     for (let i = 0; i < 2; i++) {
       await act(async () => {});
       expect(randomScripts()).toHaveLength(beforeB + i + 1);
-      await answerLastRandom(el, 4);
+      await answerLastRandom(el, { fill: 4 });
     }
 
     const answer = sent().find((m) => m.id === 'b1');
@@ -410,14 +359,12 @@ test('a reload while the random round trip is parked does not poison the next ha
   }
 });
 
-// Crash recovery is bounded for `react-native-webview`#1767: a page that dies on render
-// resets `crashFailures` every cycle, so the bound never reaches the page it is for.
 test('a clean handshake between crashes does not buy a fresh crash budget', async () => {
   const onEvent = jest.fn();
   await mount(onEvent);
   for (let i = 0; i < 4; i++) {
     const el = screen.getByTestId('mentiora-webview');
-    await initialize(el); // every cycle boots cleanly, then the renderer dies
+    await initialize(el);
     await fireEvent(el, 'renderProcessGone', { nativeEvent: { didCrash: true } });
     await advance(9000);
   }
@@ -445,8 +392,6 @@ const suspendOnce = () => {
   };
 };
 
-// `armWatchdog()` belongs in the `[]` effect: in the render body a ref guard stops
-// re-renders but not renders that never commit, whose closure still holds `onEvent`.
 test('a render that never commits leaves no watchdog behind', async () => {
   const onEvent = jest.fn();
   const { Suspends, release } = suspendOnce();
@@ -465,7 +410,6 @@ test('a render that never commits leaves no watchdog behind', async () => {
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });
 
-// StrictMode's double-mount clears a render-armed timer and the guard stops re-arming.
 test("the 8s floor survives StrictMode's simulated unmount", async () => {
   const onEvent = jest.fn();
   await render(
@@ -489,8 +433,6 @@ function Mounted({
   return show ? <MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} /> : null;
 }
 
-// Clearing only the timers that exist at unmount lets an `initialize` still parked on a
-// round trip reject afterwards, re-arm the watchdog and report a timeout for a closed chat.
 test('an initialize rejecting after unmount never reaches the host', async () => {
   const realCrypto = globalThis.crypto;
   // No host WebCrypto, and nothing answers the round trip, so the handler parks and rejects.
@@ -509,8 +451,55 @@ test('an initialize rejecting after unmount never reaches the host', async () =>
   }
 });
 
-// Every handler rejection answers -32603, so a `wasSignedIn` install with no `identity` gets a
-// Retry screen that cannot succeed; the `__DEV__` warn is the only thing naming `Mentiora.logout()`.
+test('a signed-in install with no identity answers initialize with -32002, not -32603', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    const store = new Map<string, string>([[`mentiora.wasSignedIn.${KEY}`, '1']]);
+    const storage = {
+      getItem: async (k: string) => store.get(k) ?? null,
+      setItem: async (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: async (k: string) => {
+        store.delete(k);
+      },
+    };
+    const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} storage={storage} />);
+    await initialize(view.getByTestId('mentiora-webview'));
+    await advance(0);
+    const codes = sent().map((m) => (m.error as { code?: number } | undefined)?.code);
+    expect(codes).toContain(-32002);
+    expect(codes).not.toContain(-32603);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test('a signed-in install with no identity tells the app through identityError', async () => {
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    const onEvent = jest.fn();
+    const store = new Map<string, string>([[`mentiora.wasSignedIn.${KEY}`, '1']]);
+    const storage = {
+      getItem: async (k: string) => store.get(k) ?? null,
+      setItem: async (k: string, v: string) => {
+        store.set(k, v);
+      },
+      removeItem: async (k: string) => {
+        store.delete(k);
+      },
+    };
+    const view = await render(
+      <MentioraWidget widgetUrl={WIDGET_URL} storage={storage} onEvent={onEvent} />,
+    );
+    await initialize(view.getByTestId('mentiora-webview'));
+    await advance(0);
+    expect(onEvent).toHaveBeenCalledWith({ type: 'identityError', reason: 'identity_required' });
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 test('a signed-in install with no identity says so in dev, and names logout', async () => {
   const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {

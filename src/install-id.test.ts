@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { installIdKey, loadOrCreateInstallId, rotateInstallId } from './install-id.js';
+import {
+  installIdKey,
+  installRefOf,
+  loadOrCreateInstallId,
+  rotateInstallId,
+} from './install-id.js';
 
 const memory = () => {
   const m = new Map<string, string>();
@@ -55,4 +60,27 @@ test('rotate deletes it so the next launch mints a new anonymous user', async ()
     randomBytes: async (n) => new Uint8Array(n).fill(4),
   });
   assert.notEqual(a, b);
+});
+
+// Pinned vector: the `message.missed` webhook derives `installRef` the same way, so
+// changing it breaks every integrator's device-token mapping.
+test('installRef matches the vector both sides assert', () => {
+  assert.equal(
+    installRefOf('3q2-7wAAAAB5c1lK0q9Xzw'),
+    '80dd3f9fcb64cecd90ef4db467f1091abc1198292c1887510a07af9041dcb065',
+  );
+});
+
+test('onCreated fires with the new id only when one is minted', async () => {
+  const s = memory();
+  const created: string[] = [];
+  const onCreated = (id: string) => created.push(id);
+  const a = await loadOrCreateInstallId({
+    storage: s,
+    embedKey: 'k',
+    randomBytes: bytes,
+    onCreated,
+  });
+  await loadOrCreateInstallId({ storage: s, embedKey: 'k', randomBytes: bytes, onCreated });
+  assert.deepEqual(created, [a]);
 });

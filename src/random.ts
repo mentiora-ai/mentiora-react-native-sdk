@@ -1,19 +1,16 @@
 /**
- * Random bytes from the page's WebCrypto, bounded at 2s. React Native has no
- * global WebCrypto, so a script calling `getRandomValues` is injected into the
- * WebView; the bytes become the session key and the install id. Replies are
- * authenticated by a per-request nonce, since any frame can spell the tag and
- * chosen bytes mean a chosen session key. The script runs in the main frame only.
+ * React Native has no global WebCrypto, so bytes come from a script injected into the
+ * WebView's main frame. Replies are authenticated by a per-request nonce: any frame can
+ * spell the tag, and chosen bytes would mean a chosen session key.
  */
+import { clearTimer as defaultClearTimer, setTimer as defaultSetTimer } from './timers.js';
 
 export type RandomSource = {
-  /** Exactly `count` cryptographically random bytes. A second call while one
-   *  is pending rejects. */
+  /** A second call while one is pending rejects. */
   bytes: (count: number) => Promise<Uint8Array>;
   /** Must run before the JSON-RPC parser in the onMessage router. */
   acceptReply: (raw: string) => boolean;
-  /** Call at a load boundary, or the replacement page's `initialize` fails
-   *  with -32603 "already in flight". */
+  /** Call at a load boundary, or the next page's `initialize` fails "already in flight". */
   reset: () => void;
 };
 
@@ -35,10 +32,9 @@ export type RandomDeps = {
 
 export const createRandomSource = (deps: RandomDeps): RandomSource => {
   const timeoutMs = deps.timeoutMs ?? 2000;
-  const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
-  const clearTimer =
-    deps.clearTimer ?? ((h: unknown) => clearTimeout(h as Parameters<typeof clearTimeout>[0]));
-  // ponytail: injected for a host polyfill. Not read from `globalThis`: Node's
+  const setTimer = deps.setTimer ?? defaultSetTimer;
+  const clearTimer = deps.clearTimer ?? defaultClearTimer;
+  // Injected for a host polyfill. Not read from `globalThis`: Node's
   // test runner has `crypto` and would skip the inject path.
   const globalCrypto = deps.globalCrypto;
 
@@ -97,8 +93,7 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
     if (obj.tag !== RANDOM_REPLY_TAG) return false;
 
     const current = pending;
-    // The nonce is the only authentication; a mismatch, including a stale reply,
-    // falls through to the JSON-RPC parser.
+    // A nonce mismatch, including a stale reply, falls through to the JSON-RPC parser.
     if (!current || obj.nonce !== current.nonce) return false;
 
     pending = null;
@@ -134,24 +129,4 @@ export const createRandomSource = (deps: RandomDeps): RandomSource => {
   };
 
   return { bytes, acceptReply, reset };
-};
-
-const BASE64URL_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-export const toBase64Url = (bytes: Uint8Array): string => {
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i] as number;
-    const b1 = bytes[i + 1];
-    const b2 = bytes[i + 2];
-    out += BASE64URL_ALPHABET[b0 >> 2];
-    out += BASE64URL_ALPHABET[((b0 & 0x03) << 4) | ((b1 ?? 0) >> 4)];
-    if (b1 !== undefined) {
-      out += BASE64URL_ALPHABET[((b1 & 0x0f) << 2) | ((b2 ?? 0) >> 6)];
-    }
-    if (b2 !== undefined) {
-      out += BASE64URL_ALPHABET[b2 & 0x3f];
-    }
-  }
-  return out;
 };

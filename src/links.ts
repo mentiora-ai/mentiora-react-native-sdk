@@ -1,9 +1,6 @@
-/**
- * Both checks fail closed. Not `new URL()` (RN's throws) or `originWhitelist`
- * (a prefix match: `https://a.ai` accepts `https://a.ai.evil.com`).
- */
+// Not `new URL()` (RN's throws) or `originWhitelist` (a prefix match:
+// `https://a.ai` accepts `https://a.ai.evil.com`). All checks fail closed.
 
-// The space is the \u0020 escape, not a literal, so no formatter eats it.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: a tab or NUL inside 'https:' must not slip past schemeOf
 const clean = (url: string): string => url.replace(/[\u0000-\u0020\u007f]/g, '');
 
@@ -11,11 +8,10 @@ const SCHEME_RE = /^([a-zA-Z][a-zA-Z\d+\-.]*):/;
 
 const AUTHORITY_RE = /^(https?):\/\/([^/?#]+)/i;
 
-// `https://a.ai@evil.com` is really `evil.com`, and `\` is a WHATWG separator,
-// so either voids the match.
+// `https://a.ai@evil.com` is really `evil.com`, and `\` is a WHATWG separator.
 const FORBIDDEN_IN_AUTHORITY = /[\\@]/;
 
-export const ALLOWED_SCHEMES = ['https:', 'mailto:', 'tel:'] as const;
+const ALLOWED_SCHEMES: readonly string[] = ['https:', 'mailto:', 'tel:'];
 
 const MAX_EXTERNAL_URL_LENGTH = 2048;
 
@@ -27,7 +23,7 @@ export const schemeOf = (url: string): string | null => {
 export const isAllowedExternal = (url: string): boolean => {
   if (url.length > MAX_EXTERNAL_URL_LENGTH) return false;
   const scheme = schemeOf(url);
-  return scheme !== null && (ALLOWED_SCHEMES as readonly string[]).includes(scheme);
+  return scheme !== null && ALLOWED_SCHEMES.includes(scheme);
 };
 
 export const originOf = (url: string): string | null => {

@@ -143,6 +143,9 @@ jobs:
             { type: 'openUrl', url: 'https://example.com' },
             { type: 'error', code },
             { type: 'storageUnavailable', reason },
+            { type: 'unreadCountChanged', count: 3 },
+            { type: 'installRefChanged', installRef: null },
+            { type: 'installRefChanged', installRef: 'ab' },
           ];
 
           // `.ts`, so no JSX: `null` is a valid ReactNode.
@@ -168,8 +171,10 @@ jobs:
           const badConfig: MentioraConfig = { identity };
           // @ts-expect-error 'override' means storage WORKS: it can never accompany the event
           const badReason: StorageUnavailableReason = 'override';
+          // @ts-expect-error the count is a number, never a string
+          const badCount: MentioraEvent = { type: 'unreadCountChanged', count: '3' };
 
-          export default { fetcher, events, config, props, badCode, badEvent, badConfig, badReason };
+          export default { fetcher, events, config, props, badCode, badEvent, badConfig, badReason, badCount };
           TS
           npx tsc --noEmit --strict --moduleResolution bundler --module esnext --target esnext check.ts
           echo "types ok"

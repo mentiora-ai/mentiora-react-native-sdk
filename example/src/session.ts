@@ -1,7 +1,7 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSyncExternalStore } from 'react';
 
-// Not component state: the home screen remounts when the Modal presents over it. On
-// `globalThis` so Fast Refresh re-evaluating this module does not reset it.
+// On `globalThis` so it survives screen remounts and Fast Refresh.
 type Store = { principal: string; launched: boolean };
 const KEY = '__mentioraExampleSession';
 const g = globalThis as typeof globalThis & { [KEY]?: Store };
@@ -14,7 +14,6 @@ export const setPrincipal = (next: string): void => {
   for (const listener of listeners) listener();
 };
 
-/** True exactly once per app launch, so the widget opens on start and not on remount. */
 export const claimLaunch = (): boolean => {
   if (store.launched) return false;
   store.launched = true;
@@ -30,14 +29,9 @@ const subscribe = (listener: () => void): (() => void) => {
 
 export const usePrincipal = (): string => useSyncExternalStore(subscribe, () => store.principal);
 
-/**
- * A page that fails after the handshake shows a full-screen error with no close control,
- * and the overlay covers the app. Close it if `ready` has not arrived by the deadline.
- *
- * Only armed while no page has ever reported `ready`. The widget is kept warm now, so a
- * reopen reveals a live document and no second `ready` is coming — arming then would fire
- * on a perfectly healthy widget and close it out from under the user.
- */
+/** A page failing after the handshake shows an error with no close control, so close it if
+ *  `ready` is late. Only armed before the first `ready`: the page stays warm and a reopen
+ *  never sends another. */
 const BOOT_DEADLINE_MS = 12_000;
 let bootTimer: ReturnType<typeof setTimeout> | undefined;
 let everReady = false;
@@ -55,4 +49,19 @@ export const disarmBootDeadline = (ready = false): void => {
   if (ready) everReady = true;
   clearTimeout(bootTimer);
   bootTimer = undefined;
+};
+
+/** The SDK refuses an anonymous boot on a signed-in install until `Mentiora.logout()`,
+ *  so sign-in must persist across launches. */
+const SIGNED_IN_KEY = 'example.signedInUser';
+type SignedIn = { sub: string; name: string };
+
+export const rememberSignIn = (user: SignedIn): Promise<void> =>
+  AsyncStorage.setItem(SIGNED_IN_KEY, JSON.stringify(user));
+
+export const forgetSignIn = (): Promise<void> => AsyncStorage.removeItem(SIGNED_IN_KEY);
+
+export const recallSignIn = async (): Promise<SignedIn | null> => {
+  const raw = await AsyncStorage.getItem(SIGNED_IN_KEY);
+  return raw === null ? null : (JSON.parse(raw) as SignedIn);
 };

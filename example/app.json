@@ -7,19 +7,17 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "plugins": ["expo-router"],
+    "plugins": ["expo-router", "expo-notifications"],
     "ios": {
-      "bundleIdentifier": "ai.mentiora.example.dev",
-      "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true,
-          "NSAllowsLocalNetworking": true
-        }
-      }
+      "bundleIdentifier": "ai.mentiora.example.dev"
     },
     "android": {
       "package": "ai.mentiora.example.dev",
-      "usesCleartextTraffic": true
-    }
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#FFFFFF"
+      }
+    },
+    "icon": "./assets/icon.png"
   }
 }

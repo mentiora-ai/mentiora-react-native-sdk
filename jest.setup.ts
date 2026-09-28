@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BackHandler, Linking } from 'react-native';
+import { AppState, type AppStateStatus, BackHandler, Linking } from 'react-native';
 
 // The mock is plain CommonJS while the real package sets `exports.default`, which
 // `defaultLoad` reads. Unwrapped, every test would see a spurious `peer-absent`.
@@ -14,9 +14,8 @@ afterEach(() => AsyncStorage.clear());
 // Mutated in place: `jest.mock('react-native')` spreading requireActual would
 // evaluate every lazy getter, including DevMenu, which throws.
 Linking.openURL = jest.fn();
-// A real registry, so a test can dispatch back the way RN does — newest subscriber
-// first, stopping at the first `true` — and so an unmounted component's handler really
-// goes away. Returning a dead `remove()` would leave stale handlers answering presses.
+// Dispatches like RN (newest first, stop at the first `true`); `remove()` must really
+// unsubscribe or stale handlers answer presses.
 const backHandlers: Array<() => boolean> = [];
 (globalThis as unknown as { __backHandlers: Array<() => boolean> }).__backHandlers = backHandlers;
 BackHandler.addEventListener = jest.fn((_event: string, handler: () => boolean) => {
@@ -28,3 +27,20 @@ BackHandler.addEventListener = jest.fn((_event: string, handler: () => boolean) 
     }),
   };
 }) as unknown as typeof BackHandler.addEventListener;
+
+// The preset's `AppState.currentState` is a `jest.fn()`, not a status, and its listener
+// is never called. A real registry, so a test can background and foreground the app.
+const appStateListeners = new Set<(state: AppStateStatus) => void>();
+const appState = AppState as unknown as { currentState: AppStateStatus };
+appState.currentState = 'active';
+AppState.addEventListener = jest.fn((_type: string, handler: (s: AppStateStatus) => void) => {
+  appStateListeners.add(handler);
+  return { remove: jest.fn(() => appStateListeners.delete(handler)) };
+}) as unknown as typeof AppState.addEventListener;
+(globalThis as unknown as { __setAppState: (s: AppStateStatus) => void }).__setAppState = (s) => {
+  appState.currentState = s;
+  for (const fn of [...appStateListeners]) fn(s);
+};
+afterEach(() => {
+  appState.currentState = 'active';
+});

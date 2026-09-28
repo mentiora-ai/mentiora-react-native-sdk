@@ -11,10 +11,10 @@ test('splits the install-snippet URL into the origin and the embed key', () => {
 });
 
 test('accepts a local dev server, surrounding whitespace, a trailing slash and an upper-case host', () => {
-  assert.deepEqual(parseWidgetUrl(' http://LOCALHOST:5504/h/rn/pk_wgt_2ybfz3g780wt/ \n'), {
-    origin: 'http://localhost:5504',
-    embedKey: 'pk_wgt_2ybfz3g780wt',
-    url: 'http://localhost:5504/h/rn/pk_wgt_2ybfz3g780wt',
+  assert.deepEqual(parseWidgetUrl(' http://LOCALHOST:8081/h/rn/pk_wgt_a/ \n'), {
+    origin: 'http://localhost:8081',
+    embedKey: 'pk_wgt_a',
+    url: 'http://localhost:8081/h/rn/pk_wgt_a',
   });
 });
 

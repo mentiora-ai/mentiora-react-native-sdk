@@ -1,61 +1,31 @@
 # Mentiora React Native SDK
 
-`@mentiora/react-native-sdk` — Mentiora chat for React Native and Expo.
-
-A thin JavaScript wrapper around [`react-native-webview`](https://github.com/react-native-webview/react-native-webview)
-that hosts the Mentiora widget page and implements the host side of the mobile
-bridge protocol v1. No native module, so it runs in Expo Go, Expo dev builds and
-bare React Native.
+Mentiora chat for React Native and Expo. It is pure JavaScript on top of `react-native-webview`, so it runs in Expo Go, dev builds and bare React Native.
 
 ## Install
+
+AsyncStorage is optional, but without it every launch is a new anonymous user.
 
 ```sh
 npm install @mentiora/react-native-sdk react-native-webview @react-native-async-storage/async-storage
 ```
 
-`react-native-webview` is required. `@react-native-async-storage/async-storage`
-is optional but recommended: without it the install id is held in memory and
-every launch creates a new anonymous end user.
+## Configure
 
-## Use
+`widgetUrl` comes from the install snippet in Mentiora admin. Define `identity` once, outside render, because it is compared by reference; omit it for anonymous chat.
 
-Embed the widget inline:
+```ts
+const widgetUrl = 'https://widget.<your-workspace>.mentiora.ai/h/rn/pk_wgt_…';
 
-```tsx
-import { MentioraWidget } from '@mentiora/react-native-sdk';
-
-// Hoisted on purpose: `identity` is compared by reference. A fresh object
-// literal on every render rebuilds the identity provider and discards its
-// cached token with it, so no refresh ever reuses anything. Define it once —
-// at module scope, or behind a `useMemo`.
 const identity = {
   endpoint: 'https://api.acme.com/mentiora/token',
   headers: () => ({ Authorization: `Bearer ${yourAuthToken()}` }),
 };
-
-<MentioraWidget
-  widgetUrl="https://widget.acme.mentiora.ai/h/rn/pk_wgt_a1b2c3d4e5f6"
-  identity={identity}
-/>
 ```
 
-Inline, **you** own the container, so you own how often the page loads. A widget on
-a screen your navigator unmounts is destroyed with it, and the next visit is a fresh
-load. To keep it warm, mount it somewhere that outlives the screen and pass
-`visible={false}` rather than unmounting it:
+## Overlay
 
-```tsx
-<MentioraWidget {...config} visible={onSupportTab} />
-```
-
-Parked that way it keeps its page and JS context, stops claiming the Android back
-button, and is hidden from screen readers. Hide it with that prop, not with
-`display: 'none'` or a zero size: iOS destroys a `WKWebView` that leaves the view
-hierarchy, which is the document you were trying to keep.
-
-Or present it over your app. Mount `<MentioraHost />` once, at your app root and
-as the **last** child, so its overlay draws over your navigator. It renders
-nothing until the first `open()`:
+Mount `<MentioraHost />` once, as the last child of your app root. `open()` waits for `configure()` and the host, and `close()` keeps the page warm for the next open.
 
 ```tsx
 import { Mentiora, MentioraHost } from '@mentiora/react-native-sdk';
@@ -70,80 +40,101 @@ export default function App() {
     </>
   );
 }
+
+await Mentiora.open();
+await Mentiora.open({ threadId });
+Mentiora.close();
 ```
 
-Then, from anywhere else in the app:
+## Inline
+
+Place `<MentioraWidget />` in your own layout. To keep it warm off-screen, pass `visible={false}` instead of unmounting it.
+
+```tsx
+import { MentioraWidget } from '@mentiora/react-native-sdk';
+
+<MentioraWidget widgetUrl={widgetUrl} identity={identity} visible={onSupportTab} />
+```
+
+## Events
+
+`onEvent` receives `ready`, `close`, `openUrl`, `error`, `identityError`, `storageUnavailable`, `unreadCountChanged` and `installRefChanged`.
 
 ```ts
-await Mentiora.open();
-Mentiora.close();
-await Mentiora.logout(); // rotates the install id and drops the cached token
+Mentiora.configure({
+  widgetUrl,
+  onEvent: (event) => {
+    if (event.type === 'unreadCountChanged') setBadge(event.count);
+  },
+});
 ```
 
-`Mentiora.open()` throws if `<MentioraHost />` isn't mounted yet.
+## Error screen
 
-**The first `open()` loads the page; later ones do not.** Closing parks the
-widget off-screen instead of destroying it, so the page and its JS context
-survive and reopening costs a transform. Measured against a real deployment,
-`open()` to `ready` was 2,538 ms cold and 1,470 ms on a reopen even with the
-bundle already cached — that second number is parse and execute, which only a
-live page avoids.
-
-Nothing is mounted until the first `open()`, so a user who never opens the
-widget costs you no WebView. A parked widget does not claim the Android back
-button. There is no signal while the panel is closed in v0: no badge, no push.
-
-Omit `identity` for anonymous chat. `widgetUrl` is the hosted-page URL from the install
-snippet in Mentiora admin, `https://widget.<tenant>.mentiora.ai/h/rn/pk_wgt_…`, so one
-environment variable configures the SDK. Any other shape throws from `Mentiora.configure()`,
-or on `<MentioraWidget />`'s first render, rather than failing when the user taps.
-
-In normal operation the SDK renders no chat chrome: the page draws its own
-header and close control. The one surface it owns is the failure screen — if
-the page never loads, never completes the handshake, or the renderer keeps
-dying, the SDK overlays a message with Retry and Dismiss, because a page that
-cannot draw cannot draw a way out either. It follows the system light or dark scheme, and
-`strings` overrides its copy.
-
-To match your app's design, render your own screen instead. It gets the same two actions,
-and `onEvent` still reports the `error`. Always offer `dismiss`: the screen covers the
-widget, so without it the user is stuck.
+If the page cannot load, the SDK shows a screen with Retry and Dismiss. Change its copy with `strings`, or replace it with `renderError`, which must offer `dismiss`.
 
 ```tsx
 Mentiora.configure({
   widgetUrl,
-  renderError: ({ code, retry, dismiss }) => (
-    <BrandedError onRetry={retry} onClose={dismiss} />
-  ),
+  renderError: ({ retry, dismiss }) => <BrandedError onRetry={retry} onClose={dismiss} />,
 });
 ```
 
-## Peer versions
+## Sign-out
 
-| Peer | Range |
-| --- | --- |
-| `react-native-webview` | `>=13.6.0 <17` |
-| `@react-native-async-storage/async-storage` | `>=1.23.1 <4`, optional |
-| `react-native` | `>=0.76` |
-| `react` | `>=18` |
-| `react-native-safe-area-context` | optional, used when present |
+Call `logout()` when the user signs out, and detach their device token in your backend so their replies stop reaching this device. A signed-in install later configured without `identity` gets an `identityError` instead of silently turning anonymous.
+
+```ts
+await Mentiora.logout();
+```
+
+## Notifications
+
+Mentiora sends your backend a `message.missed` webhook, enabled in Mentiora admin under Integrations, and your backend sends the push. The webhook names the user by `externalUserId` when signed in, or by `installRef` when anonymous.
+
+```ts
+Mentiora.configure({
+  widgetUrl,
+  onEvent: (event) => {
+    if (event.type === 'installRefChanged') void api.setPushOwner({ installRef: event.installRef });
+  },
+});
+```
+
+Send an alert push with this data block, using `threadId` as the collapse key.
+
+```json
+{ "mentiora": "1", "threadId": "<threadId from the webhook>" }
+```
+
+On tap, pass the push data to `handleNotificationOpen`, which needs `<MentioraHost />` and ignores pushes that are not Mentiora's.
+
+```ts
+import * as Notifications from 'expo-notifications';
+
+const route = (response: Notifications.NotificationResponse): void => {
+  Notifications.clearLastNotificationResponse();
+  const { content, trigger } = response.notification.request;
+  const data = Mentiora.isMentioraPush(content.data)
+    ? content.data
+    : trigger && 'payload' in trigger ? trigger.payload : undefined;
+  Mentiora.handleNotificationOpen(data);
+};
+
+const launch = Notifications.getLastNotificationResponse();
+if (launch) route(launch);
+Notifications.addNotificationResponseReceivedListener(route);
+```
 
 ## Development
 
-Requires [Bun](https://bun.sh) 1.4.2 and Node 24.15.0 (see `.nvmrc`).
+Requires [Bun](https://bun.sh) 1.4.2 and Node 24.15.0. Releases follow [`RELEASING.md`](RELEASING.md).
 
 ```sh
 bun install
-bun run hooks      # once, installs the lefthook pre-commit hook
-bun run typecheck
-bun run lint
-bun test
-bun run build
+bun run typecheck && bun run lint && bun run test && bun run build
 ```
-
-Releases are cut by drafting a GitHub Release; see `CHANGELOG.md`, which is the
-source of truth for release notes.
 
 ## License
 
-MIT
+[Apache-2.0](LICENSE)

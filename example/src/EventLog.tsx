@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useEventLog } from './event-log';
 
-/** Maestro asserts on `event-log-count`, not log text. The newest event is `event-log-row-0`. */
+/** UI tests should assert on `event-log-count`, not log text. The newest event is `event-log-row-0`. */
 export function EventLog(): React.JSX.Element {
   const entries = useEventLog();
   const [expanded, setExpanded] = useState(false);

@@ -1,0 +1,27 @@
+# Allowlist for gitleaks, which matches on shape and cannot tell a fixture from a
+# credential. TruffleHog --only-verified is the other gate and needs no allowlist.
+#
+# Every entry carries a reason and a reviewDate. Values are listed exactly, so a
+# real secret in the same file is still caught.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+  description = "Synthetic protocol fixtures and documentation placeholders."
+  regexes = [
+    # The deterministic session key every bridge fixture and parser test uses.
+    # reviewDate: 2027-03-01
+    '''^sk-9f2a1b7e3d4c$''',
+
+    # A JWT with a `{"alg":"HS256"}` header, no claims and the signature `y`.
+    # reviewDate: 2027-03-01
+    '''^eyJhbGciOiJIUzI1NiJ9\.x\.y$''',
+
+    # The identity-secret placeholder in example/.env.example. reviewDate: 2027-03-01
+    '''^pik_live_0123456789abcdef0123456789abcdef$''',
+
+    # Widget embed keys are public identifiers: every install snippet and widget
+    # URL carries one. reviewDate: 2027-03-01
+    '''^pk_wgt_[a-z0-9]+$''',
+  ]

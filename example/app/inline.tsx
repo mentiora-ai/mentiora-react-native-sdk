@@ -7,10 +7,7 @@ import { identityFetcher, widgetUrl } from '../src/config';
 import { record } from '../src/event-log';
 import { usePrincipal } from '../src/session';
 
-/**
- * `<MentioraWidget />` mounted inline. Embedded, the SDK only reports `{ type: 'close' }`;
- * this screen handles it by navigating back.
- */
+/** Inline, the SDK only reports `close`; the host decides where to go. */
 export default function InlineScreen(): React.JSX.Element {
   const principal = usePrincipal();
 
