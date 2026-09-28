@@ -104,15 +104,14 @@ Mentiora.configure({
 
 ## Notifications
 
-Enable the `message.missed` webhook in Mentiora admin under Integrations. The webhook names the user by `externalUserId` when signed in, or by `installRef` when anonymous. Store the device token under that key: read `installRef` with `Mentiora.getInstallRef()`, and follow `installRefChanged`, where `null` means detach it.
+1. Enable the `message.missed` webhook in Mentiora admin under Integrations. It names the user by `externalUserId`, or by `installRef` when anonymous. Store the device token under that key, using `Mentiora.getInstallRef()` and the `installRefChanged` event (`null` means detach).
+2. From the webhook, send a push with this data, collapsed by `threadId`:
 
-Send an alert push with this data block, using `threadId` as the collapse key:
+   ```json
+   { "mentiora": "1", "threadId": "<threadId from the webhook>" }
+   ```
 
-```json
-{ "mentiora": "1", "threadId": "<threadId from the webhook>" }
-```
-
-On tap, pass the push data to `Mentiora.handleNotificationTap(data)`. It opens the thread and returns `false` for a push that is not Mentiora's. With `expo-notifications`, a push sent directly through APNs carries its data in `trigger.payload`, not `content.data`. [`example/src/push.ts`](example/src/push.ts) handles both.
+3. On tap, call `Mentiora.handleNotificationTap(data)`. See [`example/src/push.ts`](example/src/push.ts) for `expo-notifications`.
 
 ## API
 
