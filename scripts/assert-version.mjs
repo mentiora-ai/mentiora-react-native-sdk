@@ -7,9 +7,10 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
-const ref = process.env.GITHUB_REF_NAME ?? process.argv[2];
+// The argument first: on a pull_request run GITHUB_REF_NAME is `<pr>/merge`.
+const ref = process.argv[2] ?? process.env.GITHUB_REF_NAME;
 if (!ref) {
-  throw new Error('no tag given: set GITHUB_REF_NAME or pass the tag as an argument');
+  throw new Error('no tag given: pass the tag as an argument or set GITHUB_REF_NAME');
 }
 
 const tagged = ref.replace(/^v/, '');

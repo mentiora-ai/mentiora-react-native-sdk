@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   publish:
+    name: Publish to npm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,13 +32,13 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # A tag can point at any commit, including one that never passed review.
-      - name: refuse a tag that is not on main
+      - name: Refuse a tag that is not on main
         run: |
           git fetch --no-tags origin main
           git merge-base --is-ancestor HEAD FETCH_HEAD \
             || { echo "::error::${{ github.event.release.tag_name }} points at a commit that is not on main"; exit 1; }
 
-      - name: assert the release is coherent
+      - name: Assert the release is coherent
         env:
           RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: node scripts/assert-version.mjs "${{ github.event.release.tag_name }}"
@@ -53,7 +54,7 @@ jobs:
       - run: npm install -g npm@latest
 
       # Without an explicit dist-tag a prerelease would publish to latest.
-      - name: publish
+      - name: Publish
         run: |
           DIST_TAG=latest
           if [ "${{ github.event.release.prerelease }}" = "true" ]; then DIST_TAG=next; fi

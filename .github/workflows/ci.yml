@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   check:
+    name: Build and Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,7 +34,7 @@ jobs:
       - run: bun run check:example-mint
       - run: bun run lint
 
-      - name: fixtures unmodified
+      - name: Fixtures unmodified
         run: node scripts/check-fixtures.mjs
 
       - run: bun run test
@@ -47,7 +48,7 @@ jobs:
 
       # Catches junk in the tarball, not compression. npm's `size` is the
       # compressed length, so both are checked: ~120KB packed, ~640KB unpacked.
-      - name: tarball size budget
+      - name: Tarball size budget
         run: |
           npm pack --ignore-scripts --dry-run --json > /tmp/pack.json
           SIZE=$(node -pe "require('/tmp/pack.json')[0].size")
@@ -59,6 +60,7 @@ jobs:
   # Installs the packed tarball under npm at the peer floor. bun and npm hoist
   # differently, so only this proves an npm consumer gets a working package.
   consumer-install:
+    name: Consumer Install
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,7 +75,7 @@ jobs:
       - run: bun run build
       - run: npm pack --ignore-scripts
 
-      - name: install the tarball under npm at the peer floor
+      - name: Install the tarball under npm at the peer floor
         run: |
           TARBALL="$PWD/$(ls mentiora-ai-react-native-sdk-*.tgz)"
           mkdir -p /tmp/consumer && cd /tmp/consumer
@@ -91,13 +93,13 @@ jobs:
 
       # Resolution cannot evaluate an RN entry (Flow source, SyntaxError under
       # bare node), so only this walk catches a missing or eager peer import.
-      - name: every eager import resolves from the consumer install
+      - name: Every eager import resolves from the consumer install
         run: |
           node "$GITHUB_WORKSPACE/scripts/check-import-graph.mjs" \
             /tmp/consumer/node_modules/@mentiora-ai/react-native-sdk/lib/module \
             /tmp/consumer
 
-      - name: resolve both entries and the public types
+      - name: Resolve both entries and the public types
         run: |
           cd /tmp/consumer
           # check-public-types.ts only exercises the ESM .d.ts; `attw --pack .` covers the CJS one.

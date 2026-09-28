@@ -15,6 +15,15 @@ test('accepts the tag matching package.json', () => {
   assert.match(run(`v${pkg.version}`), /matches package.json/);
 });
 
+test('the tag argument wins over GITHUB_REF_NAME, which is `<pr>/merge` on a PR run', () => {
+  const out = execFileSync(process.execPath, [guard, `v${pkg.version}`], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    env: { ...process.env, GITHUB_REF_NAME: '1/merge' },
+  });
+  assert.match(out, /matches package.json/);
+});
+
 test('accepts the tag without a v prefix', () => {
   assert.match(run(pkg.version), /matches package.json/);
 });
