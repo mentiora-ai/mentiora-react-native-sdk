@@ -246,14 +246,14 @@ describe('push helpers', () => {
     }
   });
 
-  test('handleNotificationOpen ignores foreign pushes and routes ours', async () => {
+  test('handleNotificationTap ignores foreign pushes and routes ours', async () => {
     Mentiora.configure(cfg);
     await render(<MentioraHost />);
-    expect(Mentiora.handleNotificationOpen({ foo: 'bar' })).toBe(false);
+    expect(Mentiora.handleNotificationTap({ foo: 'bar' })).toBe(false);
     expect(screen.queryByTestId('mentiora-webview')).toBeNull();
     let handled = false;
     await act(async () => {
-      handled = Mentiora.handleNotificationOpen({ mentiora: '1', threadId: 'thr_tap' });
+      handled = Mentiora.handleNotificationTap({ mentiora: '1', threadId: 'thr_tap' });
     });
     expect(handled).toBe(true);
     expect(await handshake()).toMatchObject({ threadId: 'thr_tap' });

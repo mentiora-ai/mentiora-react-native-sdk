@@ -29,7 +29,7 @@ test('Mentiora carries exactly the documented methods', () => {
       'close',
       'configure',
       'getInstallRef',
-      'handleNotificationOpen',
+      'handleNotificationTap',
       'isMentioraPush',
       'logout',
       'open',

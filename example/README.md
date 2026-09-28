@@ -49,7 +49,7 @@ cd example && bun run android
 
 ## Push notifications
 
-`src/push.ts` asks for permission, logs the device token and `installRef`, and routes taps through `Mentiora.handleNotificationOpen`. Put a real thread id into `push/reply.apns` and send it to a development build on the Simulator.
+`src/push.ts` asks for permission, logs the device token and `installRef`, and routes taps through `Mentiora.handleNotificationTap`. Put a real thread id into `push/reply.apns` and send it to a development build on the Simulator.
 
 ```sh
 xcrun simctl push booted ai.mentiora.example.dev example/push/reply.apns

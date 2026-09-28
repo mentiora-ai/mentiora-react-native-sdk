@@ -13,7 +13,7 @@ First release. Speaks mobile bridge protocol **v1**.
 - An install that was signed in but has no `identity` now answers `initialize` with `-32002` and emits `identityError` with reason `identity_required`, so the page can ask the user to sign in again.
 - `onEvent` reports `ready`, `close`, `openUrl`, `error`, `identityError`, `storageUnavailable`, `unreadCountChanged` and `installRefChanged`.
 - Load failures, renderer crashes, and a page that never handshakes or never reports `ready` are retried, then end on an error screen with Retry and Dismiss. `strings` changes its copy and `renderError` replaces it.
-- Notifications: `Mentiora.getInstallRef()`, `Mentiora.isMentioraPush(data)`, `Mentiora.handleNotificationOpen(data)` and `Mentiora.open({ threadId })` route a push sent from the `message.missed` webhook to its thread.
+- Notifications: `Mentiora.getInstallRef()`, `Mentiora.isMentioraPush(data)`, `Mentiora.handleNotificationTap(data)` and `Mentiora.open({ threadId })` route a push sent from the `message.missed` webhook to its thread.
 - The page receives `mentiora/hide` and `mentiora/show` when the widget is hidden or shown, and when the app goes to the background and returns.
 - Bridge methods: `initialize`, `refreshIdentity`, `openUrl`, `ready`, `identityError`, `close`, `backHandling` and `unreadCountChanged` (page to host); `back`, `show`, `hide` and `open` (host to page).
 - No runtime dependencies. `@react-native-async-storage/async-storage` and `react-native-safe-area-context` are optional peers.

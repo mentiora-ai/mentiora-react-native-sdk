@@ -29,11 +29,11 @@ const dataOf = (notification: Notifications.Notification): unknown => {
 const open = (response: Notifications.NotificationResponse, how: string): void => {
   // Otherwise every later launch from the app icon replays this tap.
   Notifications.clearLastNotificationResponse();
-  const handled = Mentiora.handleNotificationOpen(dataOf(response.notification));
+  const handled = Mentiora.handleNotificationTap(dataOf(response.notification));
   note(`${how} tap: ${handled ? 'opened the widget on its thread' : 'not a Mentiora push'}`);
 };
 
-/** Register at the app root. `handleNotificationOpen` holds a cold-start tap until
+/** Register at the app root. `handleNotificationTap` holds a cold-start tap until
  *  `Mentiora.configure()` and `<MentioraHost />` exist. */
 export const listenForTaps = (): (() => void) => {
   const launch = Notifications.getLastNotificationResponse();

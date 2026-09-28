@@ -189,7 +189,7 @@ export const Mentiora = {
     return isMentioraPush(data);
   },
   /** Returns `false` and does nothing for a push that is not Mentiora's. */
-  handleNotificationOpen(data: unknown): boolean {
+  handleNotificationTap(data: unknown): boolean {
     if (!isMentioraPush(data)) return false;
     Mentiora.open({ threadId: data.threadId });
     return true;

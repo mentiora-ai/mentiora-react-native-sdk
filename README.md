@@ -112,7 +112,7 @@ Send an alert push with this data block, using `threadId` as the collapse key:
 { "mentiora": "1", "threadId": "<threadId from the webhook>" }
 ```
 
-On tap, pass the push data to `Mentiora.handleNotificationOpen(data)`. It opens the thread and returns `false` for a push that is not Mentiora's. With `expo-notifications`, a push sent directly through APNs carries its data in `trigger.payload`, not `content.data`. [`example/src/push.ts`](example/src/push.ts) handles both.
+On tap, pass the push data to `Mentiora.handleNotificationTap(data)`. It opens the thread and returns `false` for a push that is not Mentiora's. With `expo-notifications`, a push sent directly through APNs carries its data in `trigger.payload`, not `content.data`. [`example/src/push.ts`](example/src/push.ts) handles both.
 
 ## API
 
@@ -124,7 +124,7 @@ On tap, pass the push data to `Mentiora.handleNotificationOpen(data)`. It opens 
 | `Mentiora.logout()` | Rotates the install id, clears the token and reloads. |
 | `Mentiora.getInstallRef()` | The anonymous user's webhook key, or `null` before the first open. |
 | `Mentiora.isMentioraPush(data)` | Whether a push data block is Mentiora's. |
-| `Mentiora.handleNotificationOpen(data)` | Opens a Mentiora push's thread. |
+| `Mentiora.handleNotificationTap(data)` | Call on every notification tap. Opens the thread of a Mentiora push; returns `false` for any other. |
 | `<MentioraHost />` | The overlay. Mount it once. |
 | `<MentioraWidget />` | Inline widget. Takes the config above plus `visible`. |
 
