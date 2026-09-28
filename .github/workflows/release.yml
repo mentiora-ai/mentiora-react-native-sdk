@@ -1,29 +1,29 @@
 name: Release
 
-# Publishing a GitHub Release runs this; npm matches the trusted publisher on this
-# file's name, not the trigger, and can only be set up once the package exists, so
-# the first publish is manual: `npm publish --provenance=false` from a built `main`.
+# Actions → Release → Run workflow on main publishes the version in package.json,
+# then tags it and creates the GitHub Release from its CHANGELOG.md section. The
+# bump lands through a reviewed PR because main takes no direct pushes.
+# npm matches the trusted publisher on this file's name and only lets one be added
+# to a package that exists, so 0.1.0 was published by hand; running this for a
+# version already on npm skips the publish and only tags and releases it.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write # tag and GitHub Release
   id-token: write # OIDC trusted publishing
 
 jobs:
   publish:
     name: Publish to npm
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          fetch-depth: 0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
@@ -32,17 +32,28 @@ jobs:
           node-version-file: .nvmrc
           registry-url: https://registry.npmjs.org
 
-      # A tag can point at any commit, including one that never passed review.
-      - name: Refuse a tag that is not on main
+      - name: Read the version
+        id: version
         run: |
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor HEAD FETCH_HEAD \
-            || { echo "::error::${{ github.event.release.tag_name }} points at a commit that is not on main"; exit 1; }
+          VERSION=$(node -p "require('./package.json').version")
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a version that is already released
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "::error::v${{ steps.version.outputs.version }} is already released; bump the version in a PR first"
+            exit 1
+          fi
 
       - name: Assert the release is coherent
         env:
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
-        run: node scripts/assert-version.mjs "${{ github.event.release.tag_name }}"
+          RELEASE_PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: node scripts/assert-version.mjs "v${{ steps.version.outputs.version }}"
 
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
@@ -56,8 +67,25 @@ jobs:
 
       # Without an explicit dist-tag a prerelease would publish to latest.
       - name: Publish
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          if npm view "@mentiora-ai/react-native-sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "$VERSION is already on npm; skipping the publish"
+            exit 0
+          fi
           DIST_TAG=latest
-          if [ "${{ github.event.release.prerelease }}" = "true" ]; then DIST_TAG=next; fi
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then DIST_TAG=next; fi
           echo "publishing under dist-tag $DIST_TAG"
           npm publish --ignore-scripts --tag "$DIST_TAG"
+
+      # After the publish, so a failed publish leaves no tag behind.
+      - name: Tag and create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          awk -v h="## $VERSION" '$0 == h { f = 1; next } /^## / { f = 0 } f' CHANGELOG.md > notes.md
+          FLAGS=""
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then FLAGS="--prerelease"; fi
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file notes.md $FLAGS

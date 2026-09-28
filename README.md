@@ -135,7 +135,7 @@ Mentiora.configure({
 
 ## Development
 
-Requires [Bun](https://bun.sh) 1.4.2 and Node 24.15.0. A published GitHub Release runs `.github/workflows/release.yml`, which publishes to npm.
+Requires [Bun](https://bun.sh) 1.4.2 and Node 24.15.0. To release, merge a PR that bumps `version` in `package.json`, runs `bun run gen:version`, and adds a `## x.y.z` section to `CHANGELOG.md`. Then run **Actions → Release → Run workflow** on `main`: it publishes to npm (a version like `0.2.0-beta.1` goes to the `next` dist-tag), tags the commit, and creates the GitHub Release from the changelog section.
 
 ```sh
 bun install
