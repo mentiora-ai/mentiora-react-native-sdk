@@ -6,8 +6,6 @@ import type { MentioraStorage, StorageUnavailableReason } from './types.js';
 
 export type { MentioraStorage, StorageUnavailableReason };
 
-export type StorageReason = 'override' | 'peer-loaded' | StorageUnavailableReason;
-
 export type StorageStatus =
   | { ephemeral: false; reason: 'override' | 'peer-loaded'; detail?: string }
   | { ephemeral: true; reason: StorageUnavailableReason; detail?: string };
@@ -16,7 +14,7 @@ export type ResolvedStorage = { storage: MentioraStorage } & StorageStatus;
 
 class StorageLoadFailure extends Error {
   constructor(
-    public readonly kind: 'no-require' | 'peer-absent' | 'load-threw',
+    public readonly kind: StorageUnavailableReason,
     message: string,
   ) {
     super(message);
@@ -34,7 +32,7 @@ export const defaultLoad = (
 ): MentioraStorage | null => {
   if (!hasRequire()) {
     throw new StorageLoadFailure(
-      'no-require',
+      'load-threw',
       'require is not available in this module (the ESM build has no synchronous require, ' +
         'so it cannot auto-resolve the optional @react-native-async-storage/async-storage peer)',
     );

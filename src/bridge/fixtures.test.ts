@@ -5,8 +5,6 @@ import { test } from 'node:test';
 import type { HostHandlers } from './peer.js';
 import { createHostPeer } from './peer.js';
 
-// Read with fs: `import ... with { type: 'json' }` is TS2823 under `module: node16`
-// and `new URL(..., import.meta.url)` is TS1470. Not copied into lib-test/.
 const FIXTURES = join(process.cwd(), 'src/bridge/v1/fixtures');
 const fixture = (name: string) => JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), 'utf8'));
 
@@ -24,7 +22,7 @@ const stubHandlers = (sessionKey: string): HostHandlers => ({
     protocolVersion: 1,
     sessionKey,
     installId: '0123456789abcdef0123456789abcdef',
-    sdk: { name: '@mentiora/react-native-sdk', version: '0.0.1' },
+    sdk: { name: '@mentiora-ai/react-native-sdk', version: '0.0.1' },
     visible: true,
   }),
   refreshIdentity: async () => ({ identityToken: 'eyJhbGciOiJIUzI1NiJ9.x.y' }),

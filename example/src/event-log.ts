@@ -1,4 +1,4 @@
-import type { MentioraEvent } from '@mentiora/react-native-sdk';
+import type { MentioraEvent } from '@mentiora-ai/react-native-sdk';
 import { useSyncExternalStore } from 'react';
 
 const LIMIT = 50;

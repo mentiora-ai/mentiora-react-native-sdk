@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@mentiora/react-native-sdk",
+      "name": "@mentiora-ai/react-native-sdk",
       "devDependencies": {
         "@arethetypeswrong/cli": "0.18.5",
         "@babel/core": "7.29.7",
@@ -40,7 +40,7 @@
       ],
     },
     "example": {
-      "name": "@mentiora/react-native-sdk-example",
+      "name": "@mentiora-ai/react-native-sdk-example",
       "version": "0.0.0",
       "dependencies": {
         "@react-native-async-storage/async-storage": "2.2.0",
@@ -477,7 +477,7 @@
 
     "@loaderkit/resolve": ["@loaderkit/resolve@1.0.6", "", { "dependencies": { "@braidai/lang": "^1.0.0" } }, "sha512-G8FdIoF5CypfwmD9rl8BXod5HDn8JqB0CCNBXDTaRZ+yRYhARrrSToX1zg1zy9jX3zLqigsELwhT4gNtkdQAUg=="],
 
-    "@mentiora/react-native-sdk-example": ["@mentiora/react-native-sdk-example@workspace:example"],
+    "@mentiora-ai/react-native-sdk-example": ["@mentiora-ai/react-native-sdk-example@workspace:example"],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.4", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1 || ^2.0.0-alpha.4", "@emnapi/runtime": "^1.7.1 || ^2.0.0-alpha.4" } }, "sha512-AJxoUD2/15ESHbvpcyjU274nsAPLuOtPHCk0vKJM5pj//Fg/B1FXNWjPnXTT9PymCYYiHo4zPj0ZomXBKhoy7g=="],
 

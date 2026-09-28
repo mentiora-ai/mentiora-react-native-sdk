@@ -1,4 +1,4 @@
-import { Mentiora } from '@mentiora/react-native-sdk';
+import { Mentiora } from '@mentiora-ai/react-native-sdk';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import { note } from './event-log';

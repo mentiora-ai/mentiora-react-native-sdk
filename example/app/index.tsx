@@ -1,4 +1,4 @@
-import { Mentiora } from '@mentiora/react-native-sdk';
+import { Mentiora } from '@mentiora-ai/react-native-sdk';
 import { Link } from 'expo-router';
 import type React from 'react';
 import { useCallback, useEffect, useState } from 'react';
@@ -9,9 +9,7 @@ import { EventLog } from '../src/EventLog';
 import { note, record } from '../src/event-log';
 import { showUnreadBadge } from '../src/push';
 import {
-  armBootDeadline,
   claimLaunch,
-  disarmBootDeadline,
   forgetSignIn,
   recallSignIn,
   rememberSignIn,
@@ -28,20 +26,13 @@ const configure = (identity: typeof identityFetcher | undefined): void => {
       if (event.type === 'unreadCountChanged') showUnreadBadge(event.count);
       // A signed-in install got no identity: let the user sign in again or sign out.
       if (event.type === 'identityError') Mentiora.close();
-      if (event.type === 'ready' || event.type === 'close' || event.type === 'error') {
-        disarmBootDeadline(event.type === 'ready');
-      }
     },
   });
 };
 
-const present = async (): Promise<void> => {
+const present = (): void => {
   note('open()');
-  armBootDeadline(() => {
-    note('page did not report ready — closing so the app stays reachable');
-    Mentiora.close();
-  });
-  await Mentiora.open();
+  Mentiora.open();
 };
 
 export default function HomeScreen(): React.JSX.Element {
@@ -64,7 +55,7 @@ export default function HomeScreen(): React.JSX.Element {
       } else {
         configure(undefined);
       }
-      await present();
+      present();
     })().catch((error: unknown) => {
       note(`open failed: ${String(error)}`);
     });
@@ -80,14 +71,6 @@ export default function HomeScreen(): React.JSX.Element {
       setBusy(false);
     }
   }, []);
-
-  const open = useCallback(
-    () =>
-      void guard('open', async () => {
-        await present();
-      }),
-    [guard],
-  );
 
   /** No `logout()`: it clears the signed-in marker, and a failed mint would then boot
    *  anonymous silently. */
@@ -125,7 +108,7 @@ export default function HomeScreen(): React.JSX.Element {
         </View>
 
         <View style={styles.row}>
-          <Button testID="open-button" title="Modal" onPress={open} disabled={busy} primary />
+          <Button testID="open-button" title="Overlay" onPress={present} disabled={busy} primary />
           <LinkButton testID="inline-button" title="Inline" href="/inline" />
         </View>
 

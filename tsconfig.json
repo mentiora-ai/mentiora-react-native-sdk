@@ -4,6 +4,7 @@
     "lib": ["ESNext"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "customConditions": ["mentiora-react-native-sdk-source"],
     "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,

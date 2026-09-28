@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { Linking } from 'react-native';
-import { __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
+import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/react-native-webview';
 import { toBase64Url } from '../base64url';
 import { MentioraWidget } from '../MentioraWidget';
 import { RANDOM_REPLY_TAG } from '../random';
@@ -444,6 +444,25 @@ test('the identity provider is read live, so a reconfigure is not ignored', asyn
   expect(sent().at(-1)).toMatchObject({ result: { identityToken: 'token-two' } });
 });
 
+test('a new identity reloads a booted page, which keeps the credential it booted with', async () => {
+  const first = { getToken: () => 'token-one' };
+  const view = await render(<MentioraWidget widgetUrl={WIDGET_URL} identity={first} />);
+  await initialize(screen.getByTestId('mentiora-webview'));
+  await waitForSent(1);
+  const booted = __lastWebView();
+  await view.rerender(<MentioraWidget widgetUrl={WIDGET_URL} identity={first} />);
+  expect(__lastWebView()).toBe(booted);
+
+  await view.rerender(
+    <MentioraWidget widgetUrl={WIDGET_URL} identity={{ getToken: () => 'token-two' }} />,
+  );
+  expect(__lastWebView()).not.toBe(booted);
+  await initialize(screen.getByTestId('mentiora-webview'));
+  await waitFor(() => {
+    expect(sent().at(-1)).toMatchObject({ result: { identityToken: 'token-two' } });
+  });
+});
+
 test('two widgets on one embed key share a runtime and mint ONE install id', async () => {
   await render(
     <>
@@ -469,7 +488,7 @@ test('two widgets on one embed key share a runtime and mint ONE install id', asy
 });
 
 // Built by hand because `jest.setup.ts` mocks the peer suite-wide.
-const degradeStorage = (reason: 'peer-absent' | 'no-require' = 'peer-absent') => {
+const degradeStorage = (reason: 'peer-absent' | 'load-threw' = 'peer-absent') => {
   const rt = getRuntime({ widgetUrl: WIDGET_URL });
   rt.storage = { ephemeral: true, reason, detail: 'no peer here' };
   return jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -487,12 +506,12 @@ test('degraded storage is reported through onEvent, not only to a stripped __DEV
   }
 });
 
-test('the reason travels with the event — the three fallbacks need different fixes', async () => {
-  const warn = degradeStorage('no-require');
+test('the reason travels with the event — the two fallbacks need different fixes', async () => {
+  const warn = degradeStorage('load-threw');
   const onEvent = jest.fn();
   try {
     await render(<MentioraWidget widgetUrl={WIDGET_URL} onEvent={onEvent} />);
-    expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'no-require' });
+    expect(onEvent).toHaveBeenCalledWith({ type: 'storageUnavailable', reason: 'load-threw' });
   } finally {
     warn.mockRestore();
   }

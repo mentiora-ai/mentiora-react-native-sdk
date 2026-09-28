@@ -24,7 +24,6 @@ const newNonce = (): string =>
 export type RandomDeps = {
   inject: (script: string) => void;
   timeoutMs?: number;
-  now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (h: unknown) => void;
   globalCrypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array };

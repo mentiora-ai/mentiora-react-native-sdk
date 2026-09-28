@@ -8,8 +8,8 @@ const config = getDefaultConfig(__dirname);
 
 config.watchFolders = [...config.watchFolders, root];
 
-// Otherwise the SDK's build output (`lib/`, `lib-test/`) reloads the running app.
-const IGNORED_IN_ROOT = ['lib', 'lib-test', 'dist', 'coverage', '.git', '.specs'];
+// Otherwise the SDK's build output (`lib/`) reloads the running app.
+const IGNORED_IN_ROOT = ['lib', 'dist', 'coverage', '.git', '.specs'];
 const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 config.resolver.blockList = [
   ...(Array.isArray(config.resolver.blockList)
@@ -21,7 +21,7 @@ config.resolver.blockList = [
 ];
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
-  '@mentiora/react-native-sdk': root,
+  '@mentiora-ai/react-native-sdk': root,
 };
 
 // Selects the `src/` branch of the root exports map instead of the built `lib/`.

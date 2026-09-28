@@ -16,13 +16,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
       # `bun run test` shells out to `node --test` and pack uses npm; without
       # this both run on the runner's ambient Node.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
       - run: bun install --frozen-lockfile
@@ -61,11 +61,11 @@ jobs:
   consumer-install:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 
@@ -75,11 +75,11 @@ jobs:
 
       - name: install the tarball under npm at the peer floor
         run: |
-          TARBALL="$PWD/$(ls mentiora-react-native-sdk-*.tgz)"
+          TARBALL="$PWD/$(ls mentiora-ai-react-native-sdk-*.tgz)"
           mkdir -p /tmp/consumer && cd /tmp/consumer
           npm init -y >/dev/null
           # safe-area-context is deliberately absent: the optional-peer path is
-          # the one that breaks. check.ts needs @types/react for React.JSX.Element.
+          # the one that breaks. check-public-types.ts needs @types/react for React.JSX.Element.
           npm install --no-audit --no-fund \
             "$TARBALL" \
             react@18 \
@@ -94,87 +94,15 @@ jobs:
       - name: every eager import resolves from the consumer install
         run: |
           node "$GITHUB_WORKSPACE/scripts/check-import-graph.mjs" \
-            /tmp/consumer/node_modules/@mentiora/react-native-sdk/lib/module \
+            /tmp/consumer/node_modules/@mentiora-ai/react-native-sdk/lib/module \
             /tmp/consumer
 
       - name: resolve both entries and the public types
         run: |
           cd /tmp/consumer
-          # check.ts only exercises the ESM .d.ts; `attw --pack .` covers the CJS one.
-          node -e "const p=require.resolve('@mentiora/react-native-sdk'); if(!/lib\/commonjs\/index\.js$/.test(p)) throw new Error('require resolved to '+p); console.log('cjs ok', p)"
-          node --input-type=module -e "const u = await import.meta.resolve('@mentiora/react-native-sdk'); if(!/lib\/module\/index\.js$/.test(u)) throw new Error('import resolved to '+u); console.log('esm ok', u)"
-          # Names every exported type from outside the package, so a missing one
-          # is a TS2305. The negative cases catch a union widened to `string`.
-          cat > check.ts <<'TS'
-          import type {
-            MentioraConfig,
-            MentioraErrorCode,
-            MentioraErrorRenderProps,
-            MentioraEvent,
-            MentioraIdentity,
-            MentioraIdentityCallback,
-            MentioraIdentityFetcher,
-            MentioraStorage,
-            MentioraStrings,
-            MentioraWidgetProps,
-            StorageUnavailableReason,
-          } from '@mentiora/react-native-sdk';
-
-          const storage: MentioraStorage = {
-            getItem: async () => null,
-            setItem: async () => {},
-            removeItem: async () => {},
-          };
-          const callback: MentioraIdentityCallback = { getToken: () => 'jwt' };
-          const fetcher: MentioraIdentityFetcher = {
-            endpoint: 'https://api.acme.com/mentiora/token',
-            headers: () => ({ Authorization: 'Bearer x' }),
-            body: () => ({ scope: 'widget' }),
-          };
-          const identity: MentioraIdentity = callback satisfies MentioraIdentity;
-          const strings: Partial<MentioraStrings> = { retry: 'Nochmal' };
-          const code: MentioraErrorCode = 'handshake_timeout';
-          const reason: StorageUnavailableReason = 'peer-absent';
-
-          const events: MentioraEvent[] = [
-            { type: 'ready' },
-            { type: 'close' },
-            { type: 'identityError', reason: 'identity_required' },
-            { type: 'openUrl', url: 'https://example.com' },
-            { type: 'error', code },
-            { type: 'storageUnavailable', reason },
-            { type: 'unreadCountChanged', count: 3 },
-            { type: 'installRefChanged', installRef: null },
-            { type: 'installRefChanged', installRef: 'ab' },
-          ];
-
-          // `.ts`, so no JSX: `null` is a valid ReactNode.
-          const renderError = ({ code: shown, retry, dismiss }: MentioraErrorRenderProps) =>
-            shown === 'load_failed' ? (retry(), null) : (dismiss(), null);
-
-          const config: MentioraConfig = {
-            widgetUrl: 'https://widget.acme.mentiora.ai/h/rn/pk_wgt_x',
-            identity,
-            storage,
-            strings,
-            renderError,
-            onEvent: (event: MentioraEvent) => void event,
-            onOpenUrl: (url: string) => url.startsWith('https:'),
-          };
-          const props: MentioraWidgetProps = config;
-
-          // @ts-expect-error not a MentioraErrorCode
-          const badCode: MentioraErrorCode = 'nope';
-          // @ts-expect-error not a MentioraEvent variant
-          const badEvent: MentioraEvent = { type: 'nope' };
-          // @ts-expect-error widgetUrl is required
-          const badConfig: MentioraConfig = { identity };
-          // @ts-expect-error 'override' means storage WORKS: it can never accompany the event
-          const badReason: StorageUnavailableReason = 'override';
-          // @ts-expect-error the count is a number, never a string
-          const badCount: MentioraEvent = { type: 'unreadCountChanged', count: '3' };
-
-          export default { fetcher, events, config, props, badCode, badEvent, badConfig, badReason, badCount };
-          TS
+          # check-public-types.ts only exercises the ESM .d.ts; `attw --pack .` covers the CJS one.
+          node -e "const p=require.resolve('@mentiora-ai/react-native-sdk'); if(!/lib\/commonjs\/index\.js$/.test(p)) throw new Error('require resolved to '+p); console.log('cjs ok', p)"
+          node --input-type=module -e "const u = await import.meta.resolve('@mentiora-ai/react-native-sdk'); if(!/lib\/module\/index\.js$/.test(u)) throw new Error('import resolved to '+u); console.log('esm ok', u)"
+          cp "$GITHUB_WORKSPACE/scripts/check-public-types.ts" check.ts
           npx tsc --noEmit --strict --moduleResolution bundler --module esnext --target esnext check.ts
           echo "types ok"

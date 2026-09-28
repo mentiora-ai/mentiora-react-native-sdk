@@ -32,6 +32,7 @@ export type MentioraRuntime = {
 type RuntimeEntry = {
   runtime: MentioraRuntime;
   storage: MentioraStorage;
+  storageRef: MentioraStorage | undefined;
   embedKey: string;
   identityRef: MentioraIdentity | undefined;
   epoch: LogoutEpoch;
@@ -156,7 +157,14 @@ const buildEntry = (config: MentioraConfig, embedKey: string): RuntimeEntry => {
     },
   };
 
-  return { runtime, storage, embedKey, identityRef: config.identity, epoch };
+  return {
+    runtime,
+    storage,
+    storageRef: config.storage,
+    embedKey,
+    identityRef: config.identity,
+    epoch,
+  };
 };
 
 /** A new `config.identity` swaps in a fresh provider without clearing the old one (that
@@ -165,6 +173,15 @@ export const getRuntime = (config: MentioraConfig): MentioraRuntime => {
   const { embedKey } = parseWidgetUrl(config.widgetUrl);
   const existing = runtimes.get(embedKey);
   if (existing) {
+    // Through `globalThis`: this module also runs under bare node in the core tests.
+    const dev = (globalThis as { __DEV__?: boolean }).__DEV__ === true;
+    if (dev && existing.storageRef !== config.storage) {
+      existing.storageRef = config.storage;
+      console.warn(
+        'mentiora: a different `storage` was passed for an embed key that already has one. ' +
+          'It is ignored: the install id stays where it was first stored.',
+      );
+    }
     if (existing.identityRef !== config.identity) {
       existing.runtime.identity = providerFor(existing, config.identity);
       existing.identityRef = config.identity;

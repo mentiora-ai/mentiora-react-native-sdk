@@ -1,5 +1,5 @@
 {
-  "name": "@mentiora/react-native-sdk",
+  "name": "@mentiora-ai/react-native-sdk",
   "version": "0.1.0",
   "description": "Mentiora chat for React Native and Expo. A thin wrapper around react-native-webview implementing the host side of mobile bridge protocol v1.",
   "license": "Apache-2.0",
@@ -50,9 +50,6 @@
   "workspaces": [
     "example"
   ],
-  "engines": {
-    "node": ">=24"
-  },
   "publishConfig": {
     "access": "public",
     "provenance": true
@@ -70,8 +67,7 @@
     "check:example-mint": "bun run scripts/check-example-mint.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test:core": "rm -rf lib-test && tsc -p tsconfig.test.json && node scripts/run-core-tests.mjs",
-    "test": "bun run test:core && jest",
+    "test": "jest && node --test \"test/*.test.mjs\"",
     "assert:version": "node scripts/assert-version.mjs",
     "prepack": "bun run build",
     "hooks": "lefthook install"

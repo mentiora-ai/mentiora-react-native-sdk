@@ -57,7 +57,7 @@ const openOverlay = async (): Promise<void> => {
   Mentiora.configure(cfg);
   await render(<MentioraHost />);
   await act(async () => {
-    await Mentiora.open();
+    Mentiora.open();
   });
 };
 
@@ -98,7 +98,7 @@ describe('background counts as hidden', () => {
     await act(async () => setAppState('background'));
     const before = sent().length;
     await act(async () => {
-      await Mentiora.open();
+      Mentiora.open();
     });
     expect(methods(before)).toEqual([]);
     await act(async () => setAppState('active'));
@@ -131,7 +131,7 @@ describe('background counts as hidden', () => {
 
 const openThread = async (threadId: string): Promise<void> => {
   await act(async () => {
-    await Mentiora.open({ threadId });
+    Mentiora.open({ threadId });
   });
 };
 
@@ -148,7 +148,7 @@ describe('open({ threadId })', () => {
 
   test('a tap before configure and before the host mounts still lands on its thread', async () => {
     await act(async () => {
-      await Mentiora.open({ threadId: 'thr_early' });
+      Mentiora.open({ threadId: 'thr_early' });
     });
     Mentiora.configure(cfg);
     await render(<MentioraHost />);
@@ -157,8 +157,8 @@ describe('open({ threadId })', () => {
 
   test('the latest held request wins', async () => {
     await act(async () => {
-      await Mentiora.open({ threadId: 'thr_one' });
-      await Mentiora.open({ threadId: 'thr_two' });
+      Mentiora.open({ threadId: 'thr_one' });
+      Mentiora.open({ threadId: 'thr_two' });
     });
     Mentiora.configure(cfg);
     await render(<MentioraHost />);
@@ -170,7 +170,7 @@ describe('open({ threadId })', () => {
     await render(<MentioraHost />);
     await openThread('thr_keep');
     await act(async () => {
-      await Mentiora.open();
+      Mentiora.open();
     });
     expect(await handshake()).toMatchObject({ threadId: 'thr_keep' });
   });
@@ -266,7 +266,7 @@ describe('unreadCountChanged', () => {
     Mentiora.configure({ ...cfg, onEvent });
     await render(<MentioraHost />);
     await act(async () => {
-      await Mentiora.open();
+      Mentiora.open();
     });
     await handshake();
     await notifyFromPage('mentiora/unreadCountChanged', { count: 4 });
@@ -280,14 +280,14 @@ describe('installRef', () => {
     expect(await Mentiora.getInstallRef()).toBeNull();
     await render(<MentioraHost />);
     await act(async () => {
-      await Mentiora.open();
+      Mentiora.open();
     });
     const { installId } = (await handshake()) as { installId: string };
     expect(await Mentiora.getInstallRef()).toBe(installRefOf(installId));
   });
 
-  test('getInstallRef before configure throws', async () => {
-    await expect(Mentiora.getInstallRef()).rejects.toThrow(/configure/);
+  test('getInstallRef before configure is null, so push registration at boot cannot race it', async () => {
+    await expect(Mentiora.getInstallRef()).resolves.toBeNull();
   });
 
   test('installRefChanged reaches the overlay config exactly once per change', async () => {
@@ -295,7 +295,7 @@ describe('installRef', () => {
     Mentiora.configure({ ...cfg, onEvent });
     await render(<MentioraHost />);
     await act(async () => {
-      await Mentiora.open();
+      Mentiora.open();
     });
     const { installId } = (await handshake()) as { installId: string };
     const refEvents = () =>

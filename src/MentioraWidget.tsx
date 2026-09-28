@@ -219,6 +219,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
         },
         openUrl: openExternal,
         onReady: () => {
+          recovery.ready();
           pageReady.current = true;
           const threadId = latest.current.threadChannel?.take() ?? null;
           if (threadId !== null) peer.sendOpen(threadId);
@@ -247,6 +248,23 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // Needs the full restart: without a load boundary the new page's `initialize`
   // gets `-32600` and a stale `backHeld` claims its back presses.
   useEffect(() => runtime.onReload(restart), [runtime, restart]);
+
+  // The page keeps the credential it booted with; only a new document re-runs `initialize`.
+  const bootIdentity = useRef(props.identity);
+  const identityChangedAt = useRef(0);
+  useEffect(() => {
+    if (bootIdentity.current === props.identity) return;
+    bootIdentity.current = props.identity;
+    const now = Date.now();
+    if (__DEV__ && now - identityChangedAt.current < 1000) {
+      console.warn(
+        'mentiora: `identity` changed twice within a second, and every change reloads the ' +
+          'page. It is compared by reference: define it outside render or memoize it.',
+      );
+    }
+    identityChangedAt.current = now;
+    restart();
+  }, [props.identity, restart]);
 
   // A non-ready document takes the thread in `initialize`/`ready`; an ended one is
   // restarted by the following `show` and takes it in the handshake.
@@ -278,8 +296,12 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // Not in render: a discarded render would leave a live timer.
   useEffect(() => {
     recovery.start();
-    return recovery.dispose;
-  }, [recovery]);
+    return () => {
+      recovery.dispose();
+      // Its 2s timeout would outlive the widget.
+      randomSource.reset();
+    };
+  }, [recovery, randomSource]);
 
   const onDismiss = (): void => {
     setDismissed(true);

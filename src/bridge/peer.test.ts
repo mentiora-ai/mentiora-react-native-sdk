@@ -6,7 +6,7 @@ const result = {
   protocolVersion: 1,
   sessionKey: 'sk-test',
   installId: 'iid',
-  sdk: { name: '@mentiora/react-native-sdk', version: '0.0.1' },
+  sdk: { name: '@mentiora-ai/react-native-sdk', version: '0.0.1' },
   visible: true,
 };
 const makePeer = () => {

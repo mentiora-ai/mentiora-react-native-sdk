@@ -1,4 +1,4 @@
-import type { MentioraIdentity } from '@mentiora/react-native-sdk';
+import type { MentioraIdentity } from '@mentiora-ai/react-native-sdk';
 import { note } from './event-log';
 import { issueIdentityToken } from './fake-backend';
 

@@ -8,7 +8,15 @@ import { __lastWebView, __resetWebViews, __webViews } from '../../__mocks__/reac
 import { MentioraWidget } from '../MentioraWidget';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
-import { answerLastRandom, initialize, KEY, randomScripts, sent, WIDGET_URL } from './helpers';
+import {
+  answerLastRandom,
+  initialize,
+  KEY,
+  randomScripts,
+  ready,
+  sent,
+  WIDGET_URL,
+} from './helpers';
 
 beforeEach(() => {
   jest.useFakeTimers();
@@ -48,6 +56,19 @@ test('no initialize within 8s reloads ONCE, then shows the error surface', async
   await advance(8000);
   expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
   expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+});
+
+test('no ready within 10s of the handshake reloads ONCE, then shows the error surface', async () => {
+  const onEvent = jest.fn();
+  const el = await mount(onEvent);
+  await initialize(el);
+  await advance(10000);
+  expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
+  await initialize(el);
+  await advance(10000);
+  expect(__lastWebView().reload).toHaveBeenCalledTimes(1);
+  expect(onEvent).toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
+  expect(screen.getByRole('button', { name: DEFAULT_STRINGS.dismiss })).toBeTruthy();
 });
 
 test('a handshake timeout never spends the network retry ladder', async () => {
@@ -406,6 +427,7 @@ test('a render that never commits leaves no watchdog behind', async () => {
   });
 
   await initialize(screen.getByTestId('mentiora-webview'));
+  await ready(screen.getByTestId('mentiora-webview'));
   await advance(20000);
   expect(onEvent).not.toHaveBeenCalledWith({ type: 'error', code: 'handshake_timeout' });
 });

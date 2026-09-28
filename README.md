@@ -4,33 +4,25 @@ Mentiora chat for React Native and Expo. It is pure JavaScript on top of `react-
 
 ## Install
 
-AsyncStorage is optional, but without it every launch is a new anonymous user.
+Requires React 18+, React Native 0.76+ and `react-native-webview` 13.6–16.
 
 ```sh
-npm install @mentiora/react-native-sdk react-native-webview @react-native-async-storage/async-storage
+npm install @mentiora-ai/react-native-sdk react-native-webview @react-native-async-storage/async-storage
 ```
 
-## Configure
+Both optional peers are recommended:
 
-`widgetUrl` comes from the install snippet in Mentiora admin. Define `identity` once, outside render, because it is compared by reference; omit it for anonymous chat.
-
-```ts
-const widgetUrl = 'https://widget.<your-workspace>.mentiora.ai/h/rn/pk_wgt_…';
-
-const identity = {
-  endpoint: 'https://api.acme.com/mentiora/token',
-  headers: () => ({ Authorization: `Bearer ${yourAuthToken()}` }),
-};
-```
+- `@react-native-async-storage/async-storage`: without it, every launch is a new anonymous user.
+- `react-native-safe-area-context`: the SDK reads safe-area insets from it and passes them to the page.
 
 ## Overlay
 
-Mount `<MentioraHost />` once, as the last child of your app root. `open()` waits for `configure()` and the host, and `close()` keeps the page warm for the next open.
+`widgetUrl` comes from the install snippet in Mentiora admin. Mount `<MentioraHost />` once, as the last child of your app root, so it draws over your navigator.
 
 ```tsx
-import { Mentiora, MentioraHost } from '@mentiora/react-native-sdk';
+import { Mentiora, MentioraHost } from '@mentiora-ai/react-native-sdk';
 
-Mentiora.configure({ widgetUrl, identity });
+Mentiora.configure({ widgetUrl: 'https://widget.<your-workspace>.mentiora.ai/h/rn/pk_wgt_…' });
 
 export default function App() {
   return (
@@ -41,24 +33,46 @@ export default function App() {
   );
 }
 
-await Mentiora.open();
-await Mentiora.open({ threadId });
+Mentiora.open();
+Mentiora.open({ threadId });
 Mentiora.close();
 ```
 
+`open()` called before `configure()` or before the host mounts is held until both exist. `close()` hides the overlay and keeps the page loaded for the next open.
+
 ## Inline
 
-Place `<MentioraWidget />` in your own layout. To keep it warm off-screen, pass `visible={false}` instead of unmounting it.
+Place `<MentioraWidget />` in your own layout. To keep it loaded off-screen, pass `visible={false}` instead of unmounting it.
 
 ```tsx
-import { MentioraWidget } from '@mentiora/react-native-sdk';
+import { MentioraWidget } from '@mentiora-ai/react-native-sdk';
 
 <MentioraWidget widgetUrl={widgetUrl} identity={identity} visible={onSupportTab} />
 ```
 
-## Events
+## Identity
 
-`onEvent` receives `ready`, `close`, `openUrl`, `error`, `identityError`, `storageUnavailable`, `unreadCountChanged` and `installRefChanged`.
+Omit `identity` for anonymous chat. It is compared by reference, and a new object reloads the page, so define it outside render. Pass either a callback:
+
+```ts
+const identity = { getToken: () => api.fetchMentioraToken() };
+```
+
+or a token endpoint for the SDK to call:
+
+```ts
+const identity = {
+  endpoint: 'https://api.acme.com/mentiora/token',
+  headers: () => ({ Authorization: `Bearer ${yourAuthToken()}` }),
+  body: () => ({ locale }),
+};
+```
+
+The SDK sends a JSON `POST` and accepts `{ "token": "…" }`, `{ "identityToken": "…" }` or a bare string. The token is a JWT whose `exp - iat` is at most 3600 seconds. The SDK caches it and refreshes it before `exp`.
+
+Call `Mentiora.logout()` when the user signs out, and detach their device token in your backend. After a signed-in session, the install stays marked as signed in until `logout()`. Until then, each open without `identity` fails with an `identityError`.
+
+## Events
 
 ```ts
 Mentiora.configure({
@@ -68,6 +82,17 @@ Mentiora.configure({
   },
 });
 ```
+
+| Event | Payload |
+| --- | --- |
+| `ready` | The page has rendered. |
+| `close` | The user closed the widget. |
+| `openUrl` | `url`, a link the page opened. By default the SDK opens `https:`, `mailto:` and `tel:` links; return `true` from `onOpenUrl` to handle a link yourself. |
+| `error` | `code`: `load_failed`, `handshake_timeout` or `renderer_crashed`. |
+| `identityError` | `reason`. |
+| `storageUnavailable` | `reason`: `peer-absent` or `load-threw`. |
+| `unreadCountChanged` | `count`, only while the page is loaded. |
+| `installRefChanged` | `installRef`, or `null` after `logout()`. |
 
 ## Error screen
 
@@ -80,51 +105,37 @@ Mentiora.configure({
 });
 ```
 
-## Sign-out
-
-Call `logout()` when the user signs out, and detach their device token in your backend so their replies stop reaching this device. A signed-in install later configured without `identity` gets an `identityError` instead of silently turning anonymous.
-
-```ts
-await Mentiora.logout();
-```
-
 ## Notifications
 
-Mentiora sends your backend a `message.missed` webhook, enabled in Mentiora admin under Integrations, and your backend sends the push. The webhook names the user by `externalUserId` when signed in, or by `installRef` when anonymous.
+Enable the `message.missed` webhook in Mentiora admin under Integrations. The webhook names the user by `externalUserId` when signed in, or by `installRef` when anonymous. Store the device token under that key: read `installRef` with `Mentiora.getInstallRef()`, and follow `installRefChanged`, where `null` means detach it.
 
-```ts
-Mentiora.configure({
-  widgetUrl,
-  onEvent: (event) => {
-    if (event.type === 'installRefChanged') void api.setPushOwner({ installRef: event.installRef });
-  },
-});
-```
-
-Send an alert push with this data block, using `threadId` as the collapse key.
+Send an alert push with this data block, using `threadId` as the collapse key:
 
 ```json
 { "mentiora": "1", "threadId": "<threadId from the webhook>" }
 ```
 
-On tap, pass the push data to `handleNotificationOpen`, which needs `<MentioraHost />` and ignores pushes that are not Mentiora's.
+On tap, pass the push data to `Mentiora.handleNotificationOpen(data)`. It opens the thread and returns `false` for a push that is not Mentiora's. With `expo-notifications`, a push sent directly through APNs carries its data in `trigger.payload`, not `content.data`. [`example/src/push.ts`](example/src/push.ts) handles both.
 
-```ts
-import * as Notifications from 'expo-notifications';
+## API
 
-const route = (response: Notifications.NotificationResponse): void => {
-  Notifications.clearLastNotificationResponse();
-  const { content, trigger } = response.notification.request;
-  const data = Mentiora.isMentioraPush(content.data)
-    ? content.data
-    : trigger && 'payload' in trigger ? trigger.payload : undefined;
-  Mentiora.handleNotificationOpen(data);
-};
+| | |
+| --- | --- |
+| `Mentiora.configure(config)` | Sets `widgetUrl`, `identity`, `onEvent`, `onOpenUrl`, `storage`, `strings` and `renderError`. Throws on a malformed `widgetUrl`. |
+| `Mentiora.open({ threadId? })` | Shows the overlay. |
+| `Mentiora.close()` | Hides it and keeps the page loaded. |
+| `Mentiora.logout()` | Rotates the install id, clears the token and reloads. |
+| `Mentiora.getInstallRef()` | The anonymous user's webhook key, or `null` before the first open. |
+| `Mentiora.isMentioraPush(data)` | Whether a push data block is Mentiora's. |
+| `Mentiora.handleNotificationOpen(data)` | Opens a Mentiora push's thread. |
+| `<MentioraHost />` | The overlay. Mount it once. |
+| `<MentioraWidget />` | Inline widget. Takes the config above plus `visible`. |
 
-const launch = Notifications.getLastNotificationResponse();
-if (launch) route(launch);
-Notifications.addNotificationResponseReceivedListener(route);
-```
+`storage` replaces AsyncStorage for the install id, with the same `getItem`, `setItem` and `removeItem`.
+
+## Example
+
+[`example/`](example/README.md) is an Expo app that drives both entry points against your widget.
 
 ## Development
 

@@ -24,4 +24,8 @@ useDefault = true
     # Widget embed keys are public identifiers: every install snippet and widget
     # URL carries one. reviewDate: 2027-03-01
     '''^pk_wgt_[a-z0-9]+$''',
+
+    # The HMAC key scripts/check-example-mint.ts signs its reference JWTs with.
+    # reviewDate: 2027-03-01
+    '''^not-a-real-secret-only-for-this-check$''',
   ]

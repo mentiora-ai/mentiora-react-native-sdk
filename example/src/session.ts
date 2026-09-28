@@ -29,28 +29,6 @@ const subscribe = (listener: () => void): (() => void) => {
 
 export const usePrincipal = (): string => useSyncExternalStore(subscribe, () => store.principal);
 
-/** A page failing after the handshake shows an error with no close control, so close it if
- *  `ready` is late. Only armed before the first `ready`: the page stays warm and a reopen
- *  never sends another. */
-const BOOT_DEADLINE_MS = 12_000;
-let bootTimer: ReturnType<typeof setTimeout> | undefined;
-let everReady = false;
-
-export const armBootDeadline = (onExpiry: () => void): void => {
-  clearTimeout(bootTimer);
-  if (everReady) {
-    bootTimer = undefined;
-    return;
-  }
-  bootTimer = setTimeout(onExpiry, BOOT_DEADLINE_MS);
-};
-
-export const disarmBootDeadline = (ready = false): void => {
-  if (ready) everReady = true;
-  clearTimeout(bootTimer);
-  bootTimer = undefined;
-};
-
 /** The SDK refuses an anonymous boot on a signed-in install until `Mentiora.logout()`,
  *  so sign-in must persist across launches. */
 const SIGNED_IN_KEY = 'example.signedInUser';

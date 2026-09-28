@@ -1,5 +1,5 @@
 // Shared by the Jest suites. Not a `.test.tsx`, so Jest never runs it as a suite.
-import { fireEvent, type screen } from '@testing-library/react-native';
+import { fireEvent, type screen, waitFor } from '@testing-library/react-native';
 import { __lastWebView, type MockWebViewRef } from '../../__mocks__/react-native-webview';
 import { RANDOM_REPLY_TAG } from '../random';
 
@@ -60,6 +60,24 @@ export const initialize = (el: Element, protocolVersion = 1) =>
       }),
     },
   });
+
+/** The page's `mentiora/ready`, once `initialize` has been answered. Without it the
+ *  `ready` watchdog reloads the page. */
+export const ready = async (el: Element): Promise<void> => {
+  let sessionKey: string | undefined;
+  await waitFor(() => {
+    const reply = sentFrom().findLast((m) => 'result' in m) as
+      | { result: { sessionKey?: string } }
+      | undefined;
+    sessionKey = reply?.result.sessionKey;
+    expect(sessionKey).toEqual(expect.any(String));
+  });
+  await fireEvent(el, 'message', {
+    nativeEvent: {
+      data: JSON.stringify({ jsonrpc: '2.0', method: 'mentiora/ready', params: { sessionKey } }),
+    },
+  });
+};
 
 export const currentSessionKey = (view?: MockWebViewRef): string => {
   const last = sentFrom(view).at(-1) as { params?: { sessionKey?: string } } | undefined;

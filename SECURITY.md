@@ -2,11 +2,7 @@
 
 ## Supported versions
 
-Pre-1.0, only the latest version published to npm is supported.
-
-Shipped SDK versions live on inside host app binaries, so the hosted widget
-page keeps serving every bridge protocol version still in its support window.
-The changelog names the protocol version each release speaks.
+Before 1.0, only the latest version published to npm is supported.
 
 ## Reporting a vulnerability
 

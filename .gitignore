@@ -6,7 +6,6 @@ coverage/
 .DS_Store
 .specs/
 .superpowers/
-lib-test/
 .expo/
 dist/
 expo-env.d.ts

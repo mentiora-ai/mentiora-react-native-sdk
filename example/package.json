@@ -1,5 +1,5 @@
 {
-  "name": "@mentiora/react-native-sdk-example",
+  "name": "@mentiora-ai/react-native-sdk-example",
   "version": "0.0.0",
   "private": true,
   "main": "expo-router/entry",

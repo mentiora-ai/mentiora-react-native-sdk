@@ -57,16 +57,11 @@ test('defaultLoad throws a tagged error when require is unavailable, instead of 
   assert.throws(() => defaultLoad(() => false));
 });
 
-test('resolveStorage tags a missing require distinctly from a generic load throw (the ESM-build case)', () => {
+test('resolveStorage reports a missing require as load-threw, with the reason in detail', () => {
   const r = resolveStorage(undefined, () => defaultLoad(() => false));
   assert.equal(r.ephemeral, true);
-  assert.equal(
-    r.reason,
-    'no-require',
-    'a build with no synchronous require cannot auto-resolve storage at all — ' +
-      'distinct from the peer simply not being installed',
-  );
-  assert.ok(r.detail && r.detail.length > 0);
+  assert.equal(r.reason, 'load-threw');
+  assert.match(r.detail ?? '', /require is not available/);
 });
 
 test('the in-memory fallback round-trips and forgets on removeItem', async () => {

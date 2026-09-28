@@ -150,18 +150,13 @@ export const Mentiora = {
   configure(config: MentioraConfig): void {
     // Validated here so a bad URL fails at startup, not on the user's tap.
     parseWidgetUrl(config.widgetUrl);
-    const previous = store.state.config;
     followInstallRef(config);
+    // A mounted overlay's widget reloads itself when `identity` changes.
     setState({ config });
-    // The page keeps the credential it booted with; only a new document re-runs `initialize`.
-    // Reload on identity change only: `strings` and `onEvent` change freely.
-    if (store.state.mounted && previous !== null && previous.identity !== config.identity) {
-      getRuntime(config).reload();
-    }
     runHeldOpen();
   },
   /** Held until both `configure()` has run and `<MentioraHost />` has mounted. */
-  async open(options?: { threadId?: string }): Promise<void> {
+  open(options?: { threadId?: string }): void {
     if (options?.threadId) store.pendingThreadId = options.threadId;
     if (!canShow()) {
       store.heldOpen = true;
@@ -184,18 +179,19 @@ export const Mentiora = {
     await getRuntime(config).logout();
   },
   /** The key `message.missed` webhooks carry when there is no `externalUserId`.
-   *  `null` until the widget has been opened once. */
+   *  `null` before `configure()` and until the widget has been opened once. */
   async getInstallRef(): Promise<string | null> {
-    return getRuntime(requireConfig('getInstallRef')).installRef();
+    const { config } = store.state;
+    return config ? getRuntime(config).installRef() : null;
   },
   /** Whether a push's data block is Mentiora's: `{ mentiora: '1', threadId }`. */
-  isMentioraPush(data: unknown): boolean {
+  isMentioraPush(data: unknown): data is { mentiora: '1'; threadId: string } {
     return isMentioraPush(data);
   },
   /** Returns `false` and does nothing for a push that is not Mentiora's. */
   handleNotificationOpen(data: unknown): boolean {
     if (!isMentioraPush(data)) return false;
-    void Mentiora.open({ threadId: data.threadId });
+    Mentiora.open({ threadId: data.threadId });
     return true;
   },
 };

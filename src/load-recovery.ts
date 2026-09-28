@@ -1,5 +1,6 @@
 /**
- * The widget's recovery ladders: network failure, renderer crash and handshake timeout.
+ * The widget's recovery ladders: network failure, renderer crash, and a handshake or
+ * `ready` that never arrives.
  * Every timer is tagged with the `generation` it was armed under and no-ops if that moved.
  */
 import { backoff, delaysFor, type RetryPolicy } from './retry.js';
@@ -10,6 +11,8 @@ const LOAD_RETRY_POLICY: RetryPolicy = backoff(3);
 const CRASH_RETRY_POLICY: RetryPolicy = backoff(4);
 
 const HANDSHAKE_WATCHDOG_MS = 8000;
+// The SDK draws no chrome, so a page that handshakes and never renders would strand the user.
+const READY_WATCHDOG_MS = 10_000;
 const HANDSHAKE_RECOVERY_CAP = 1;
 
 export type LoadRecoveryDeps = {
@@ -27,8 +30,10 @@ export type LoadRecovery = {
   generation: () => number;
   /** Before any `await` in `initialize`: one at 7.9s must disarm the 8s watchdog. */
   handshakeStarted: () => void;
-  /** Success only, or a failing handshake becomes an unbounded reload loop. */
+  /** Arms the `ready` watchdog. */
   handshakeSucceeded: (gen: number) => void;
+  /** Success only, or a page that never renders becomes an unbounded reload loop. */
+  ready: () => void;
   /** Re-arms: `onLoadEnd` will not fire again, so a rejected handshake would hang. */
   handshakeFailed: (gen: number) => void;
   /** A new top-frame document started loading. */
@@ -82,7 +87,7 @@ export const createLoadRecovery = (deps: LoadRecoveryDeps): LoadRecovery => {
     clearWatchdog();
   };
 
-  const armWatchdog = (): void => {
+  const armWatchdog = (ms = HANDSHAKE_WATCHDOG_MS): void => {
     clearWatchdog();
     const gen = generation;
     watchdogTimer = setTimeout(() => {
@@ -97,7 +102,7 @@ export const createLoadRecovery = (deps: LoadRecoveryDeps): LoadRecovery => {
           deps.onGiveUp('handshake_timeout');
         }
       });
-    }, HANDSHAKE_WATCHDOG_MS);
+    }, ms);
   };
 
   const beginFreshLoad = (): void => {
@@ -142,6 +147,10 @@ export const createLoadRecovery = (deps: LoadRecoveryDeps): LoadRecovery => {
     handshakeSucceeded: (gen) => {
       if (gen !== generation) return;
       failures.network = 0;
+      armWatchdog(READY_WATCHDOG_MS);
+    },
+    ready: () => {
+      clearWatchdog();
       failures.handshake = 0;
     },
     handshakeFailed: (gen) => {

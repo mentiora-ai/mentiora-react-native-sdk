@@ -1,8 +1,9 @@
-import { MentioraHost } from '@mentiora/react-native-sdk';
+import { MentioraHost } from '@mentiora-ai/react-native-sdk';
 import { Stack } from 'expo-router';
 import type React from 'react';
 import { useEffect } from 'react';
 import { isConfigured, isMalformed } from '../src/config';
+import { note } from '../src/event-log';
 import { enablePush, listenForTaps } from '../src/push';
 import { SetupRequired } from '../src/SetupRequired';
 
@@ -10,7 +11,7 @@ export default function RootLayout(): React.JSX.Element {
   useEffect(() => listenForTaps(), []);
   // A real app asks for push permission in context, e.g. after the user's first message.
   useEffect(() => {
-    if (isConfigured) void enablePush();
+    if (isConfigured) enablePush().catch((error: unknown) => note(`push: ${String(error)}`));
   }, []);
 
   if (!isConfigured) return <SetupRequired malformed={isMalformed} />;

@@ -1,6 +1,6 @@
 # Example
 
-An Expo app that drives both entry points of `@mentiora/react-native-sdk` against your real widget. The home screen opens the overlay or the inline screen and logs every `onEvent` payload.
+An Expo app that drives both entry points of `@mentiora-ai/react-native-sdk` against your real widget. The home screen opens the overlay or the inline screen and logs every `onEvent` payload.
 
 ## Configure
 
@@ -33,7 +33,7 @@ cd example && bun run ios
 
 ## Run on a phone
 
-Install Expo Go, join the same Wi-Fi as your computer, and scan the QR code. Use `--tunnel` if the phone cannot reach your computer.
+Install Expo Go, join the same Wi-Fi as your computer, and scan the QR code. Use `--tunnel` if the phone cannot reach your computer. Expo Go cannot receive remote pushes, so the push section needs `bun run ios` or `bun run android`.
 
 ```sh
 cd example && bun run start
@@ -41,15 +41,9 @@ cd example && bun run start
 
 ## Run on Android
 
-Needs JDK 17, the Android command-line tools and an arm64 emulator image.
+Set up an emulator with [Expo's Android guide](https://docs.expo.dev/workflow/android-studio-emulator/), then:
 
 ```sh
-brew install --cask temurin@17 android-commandlinetools android-platform-tools
-export ANDROID_HOME="$HOME/Library/Android/sdk" PATH="$HOME/Library/Android/sdk/emulator:$HOME/Library/Android/sdk/platform-tools:$PATH"
-yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses
-sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-36" "emulator" "system-images;android-36;google_apis;arm64-v8a"
-avdmanager create avd --name mentiora --package "system-images;android-36;google_apis;arm64-v8a" --device pixel_7
-emulator -avd mentiora &
 cd example && bun run android
 ```
 
@@ -63,11 +57,4 @@ xcrun simctl push booted ai.mentiora.example.dev example/push/reply.apns
 
 ## Checks
 
-These type-check the example and bundle it for both platforms.
-
-```sh
-cd example
-bun x tsc --noEmit
-bun x expo export --platform ios
-bun x expo export --platform android
-```
+From the repository root, `bun run typecheck:example` type-checks the example and `bun run bundle:example` bundles it for both platforms.

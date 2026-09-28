@@ -1,5 +1,5 @@
-import type { MentioraEvent } from '@mentiora/react-native-sdk';
-import { MentioraWidget } from '@mentiora/react-native-sdk';
+import type { MentioraEvent } from '@mentiora-ai/react-native-sdk';
+import { MentioraWidget } from '@mentiora-ai/react-native-sdk';
 import { router } from 'expo-router';
 import type React from 'react';
 import { StyleSheet, View } from 'react-native';

@@ -21,8 +21,8 @@ export type MentioraIdentity = MentioraIdentityCallback | MentioraIdentityFetche
 export type MentioraErrorCode = 'load_failed' | 'handshake_timeout' | 'renderer_crashed';
 
 /** Why the SDK fell back to in-memory storage: install the AsyncStorage peer
- *  (`peer-absent`), pass `storage` (`no-require`), or fix yours (`load-threw`). */
-export type StorageUnavailableReason = 'peer-absent' | 'no-require' | 'load-threw';
+ *  (`peer-absent`), or it failed to load (`load-threw`) and you can pass `storage`. */
+export type StorageUnavailableReason = 'peer-absent' | 'load-threw';
 
 export type MentioraEvent =
   | { type: 'ready' }
@@ -55,11 +55,14 @@ export interface MentioraConfig {
   /** Hosted-page URL from the install snippet (`https://widget.acme.mentiora.ai/h/rn/pk_wgt_…`);
    *  anything else throws. */
   widgetUrl: string;
-  /** Omitted means anonymous chat. */
+  /** Omitted means anonymous chat. Compared by reference: a new object reloads the page,
+   *  so define it outside render. */
   identity?: MentioraIdentity;
+  /** Every event the widget raises; a throw is caught. */
   onEvent?: (event: MentioraEvent) => void;
   /** Return true to take over. Default opens https:, mailto: and tel: via Linking. */
   onOpenUrl?: (url: string) => boolean;
+  /** Persists the install id; defaults to AsyncStorage. Read once per embed key. */
   storage?: MentioraStorage;
   /** Overrides the error screen's copy; an `undefined` key keeps its default. */
   strings?: Partial<MentioraStrings>;

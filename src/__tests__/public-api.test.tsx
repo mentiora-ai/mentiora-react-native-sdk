@@ -1,23 +1,14 @@
-// Named `.tsx`, not `.ts`: Jest matches only `*.test.tsx` and tsconfig.test.json
-// excludes `src/__tests__`, so a `.ts` file here would silently never execute.
-
 import type { MentioraEvent } from '../index';
 import * as sdk from '../index';
-
-// A stub is a function too, so the surface has to be called, not type-checked.
-test('the stubs are gone: the surface no longer throws "not implemented"', () => {
-  expect(() => sdk.Mentiora.close()).not.toThrow();
-  expect(() => sdk.Mentiora.configure({ widgetUrl: 'https://w.x.ai/h/rn/pk_wgt_a' })).not.toThrow();
-});
 
 test('SDK_VERSION matches package.json — release.yml aborts if it does not', () => {
   const pkg = require('../../package.json') as { version: string };
   expect(sdk.SDK_VERSION).toBe(pkg.version);
-  expect(sdk.SDK_NAME).toBe('@mentiora/react-native-sdk');
+  expect(sdk.SDK_NAME).toBe('@mentiora-ai/react-native-sdk');
 });
 
 test('the surface is exactly the approved list — no internals, no test helpers', () => {
-  // Value exports only; ci.yml's check.ts covers the types from outside the package.
+  // Value exports only; scripts/check-public-types.ts covers the types from outside the package.
   expect(Object.keys(sdk).sort()).toEqual(
     ['Mentiora', 'MentioraHost', 'MentioraWidget', 'SDK_NAME', 'SDK_VERSION'].sort(),
   );
