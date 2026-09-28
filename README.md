@@ -7,13 +7,10 @@ Mentiora chat for React Native and Expo. It is pure JavaScript on top of `react-
 Requires React 18+, React Native 0.76+ and `react-native-webview` 13.6–16.
 
 ```sh
-npm install @mentiora-ai/react-native-sdk react-native-webview @react-native-async-storage/async-storage
+npm install @mentiora-ai/react-native-sdk react-native-webview @react-native-async-storage/async-storage react-native-safe-area-context
 ```
 
-Both optional peers are recommended:
-
-- `@react-native-async-storage/async-storage`: without it, every launch is a new anonymous user.
-- `react-native-safe-area-context`: the SDK reads safe-area insets from it and passes them to the page.
+The peers have native code, so they go in your app's own dependencies, where autolinking finds them; in an Expo app use `npx expo install` to get matching versions. Without AsyncStorage every launch is a new anonymous user. Without `react-native-safe-area-context`, which most apps already have, the SDK can't pass safe-area insets to the page.
 
 ## Overlay
 
@@ -55,7 +52,7 @@ import { MentioraWidget } from '@mentiora-ai/react-native-sdk';
 Omit `identity` for anonymous chat. It is compared by reference, and a new object reloads the page, so define it outside render. Pass either a callback:
 
 ```ts
-const identity = { getToken: () => api.fetchMentioraToken() };
+const identity = { getToken: () => api.fetchIdentityToken() };
 ```
 
 or a token endpoint for the SDK to call:
@@ -139,7 +136,7 @@ On tap, pass the push data to `Mentiora.handleNotificationOpen(data)`. It opens 
 
 ## Development
 
-Requires [Bun](https://bun.sh) 1.4.2 and Node 24.15.0. Releases follow [`RELEASING.md`](RELEASING.md).
+Requires [Bun](https://bun.sh) 1.4.2 and Node 24.15.0. A published GitHub Release runs `.github/workflows/release.yml`, which publishes to npm.
 
 ```sh
 bun install

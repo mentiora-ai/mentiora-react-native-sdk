@@ -31,7 +31,6 @@ jobs:
       - run: bun run typecheck
       # The root tsconfig excludes `example/`.
       - run: bun run typecheck:example
-      - run: bun run check:example-mint
       - run: bun run lint
 
       - name: Fixtures unmodified

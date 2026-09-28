@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { isAllowedExternal, isSameDocument, isSameOrigin, originOf, schemeOf } from './links.js';
 
 test('allows exactly https, mailto and tel', () => {

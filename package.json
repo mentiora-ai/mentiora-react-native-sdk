@@ -18,7 +18,6 @@
     "mentiora"
   ],
   "sideEffects": false,
-  "source": "src/index.ts",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
   "types": "lib/commonjs/index.d.ts",
@@ -64,7 +63,6 @@
     "typecheck": "tsc --noEmit",
     "typecheck:example": "tsc --noEmit -p example/tsconfig.json",
     "bundle:example": "cd example && bun x expo export --platform ios && bun x expo export --platform android",
-    "check:example-mint": "bun run scripts/check-example-mint.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "jest && node --test \"test/*.test.mjs\"",

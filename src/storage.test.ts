@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import type { MentioraStorage } from './storage.js';
 import { defaultLoad, resolveStorage } from './storage.js';
 

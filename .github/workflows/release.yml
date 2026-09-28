@@ -1,7 +1,8 @@
 name: Release
 
 # Publishing a GitHub Release runs this; npm matches the trusted publisher on this
-# file's name, not the trigger. The first publish is manual: see RELEASING.md.
+# file's name, not the trigger, and can only be set up once the package exists, so
+# the first publish is manual: `npm publish --provenance=false` from a built `main`.
 on:
   release:
     types: [published]

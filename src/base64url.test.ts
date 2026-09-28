@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { fromBase64Url, toBase64Url } from './base64url.js';
 
 test('toBase64Url emits no +, / or = padding', () => {

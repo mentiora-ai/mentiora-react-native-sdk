@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { createRandomSource, RANDOM_REPLY_TAG } from './random.js';
 
 // Read back out of the injected script, so dropping the nonce entirely fails here.

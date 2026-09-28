@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { isUnreadCountParams, parseInbound } from './guards.js';
 
 test('parseInbound rejects non-JSON and non-2.0 envelopes', () => {

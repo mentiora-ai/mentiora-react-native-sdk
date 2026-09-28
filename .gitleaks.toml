@@ -25,7 +25,7 @@ useDefault = true
     # URL carries one. reviewDate: 2027-03-01
     '''^pk_wgt_[a-z0-9]+$''',
 
-    # The HMAC key scripts/check-example-mint.ts signs its reference JWTs with.
+    # A fake HMAC key that a since-removed example check signed test JWTs with.
     # reviewDate: 2027-03-01
     '''^not-a-real-secret-only-for-this-check$''',
   ]

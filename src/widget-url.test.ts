@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { parseWidgetUrl } from './widget-url.js';
 
 test('splits the install-snippet URL into the origin and the embed key', () => {

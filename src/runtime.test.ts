@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { toBase64Url } from './base64url.js';
 import { wasSignedInKey } from './identity.js';
 import { installRefOf } from './install-id.js';
