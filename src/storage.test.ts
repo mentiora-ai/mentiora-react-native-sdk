@@ -101,6 +101,30 @@ test('a MODULE_NOT_FOUND naming the peer itself is peer-absent', () => {
   assert.equal(r.reason, 'peer-absent');
 });
 
+test("Metro's error for a missing optional peer is peer-absent", () => {
+  const r = resolveStorage(undefined, () =>
+    defaultLoad(
+      () => true,
+      () => {
+        throw new Error('Requiring unknown module "undefined".');
+      },
+    ),
+  );
+  assert.equal(r.reason, 'peer-absent');
+});
+
+test("Metro's unknown-module error for a real module id is load-threw", () => {
+  const r = resolveStorage(undefined, () =>
+    defaultLoad(
+      () => true,
+      () => {
+        throw new Error('Requiring unknown module "412".');
+      },
+    ),
+  );
+  assert.equal(r.reason, 'load-threw');
+});
+
 test('a MODULE_NOT_FOUND naming something ELSE is load-threw, not peer-absent', () => {
   const r = resolveStorage(undefined, () =>
     defaultLoad(

@@ -2,7 +2,13 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { useLayoutEffect } from 'react';
 import { BackHandler, Platform, StatusBar } from 'react-native';
 import { __lastWebView, __resetWebViews } from '../../__mocks__/react-native-webview';
-import { hasValidInsets, loadSafeAreaInsets, resolveHostInsets } from '../insets';
+import { ThreadChannelContext } from '../channels';
+import {
+  hasValidInsets,
+  loadSafeAreaInsets,
+  loadSafeAreaListener,
+  resolveHostInsets,
+} from '../insets';
 import { MentioraWidget } from '../MentioraWidget';
 import { __resetRuntimes } from '../runtime';
 import { DEFAULT_STRINGS } from '../ui/strings';
@@ -12,9 +18,35 @@ import { backHandling, initialize, sent, WIDGET_URL } from './helpers';
 // hoist and may only name `mock*` identifiers.
 jest.mock(
   'react-native-safe-area-context',
-  () => ({ initialWindowMetrics: { insets: { top: 44, right: 1, bottom: 34, left: 2 } } }),
+  () => {
+    const { createElement } = require('react');
+    const { View } = require('react-native');
+    return {
+      initialWindowMetrics: { insets: { top: 44, right: 1, bottom: 34, left: 2 } },
+      SafeAreaListener: (props: object) =>
+        createElement(View, { ...props, testID: 'safe-area-listener' }),
+    };
+  },
   { virtual: true },
 );
+
+const onPlatform = async (os: 'ios' | 'android', run: () => Promise<void>): Promise<void> => {
+  const real = Platform.OS;
+  Object.defineProperty(Platform, 'OS', { value: os, configurable: true });
+  try {
+    await run();
+  } finally {
+    Object.defineProperty(Platform, 'OS', { value: real, configurable: true });
+  }
+};
+
+const injectedScripts = (): string[] =>
+  (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(([s]) => s as string);
+
+const setsProperty = (name: string, px: number): boolean =>
+  injectedScripts().some((s) =>
+    s.includes(`setProperty(${JSON.stringify(name)}, ${JSON.stringify(`${px}px`)})`),
+  );
 
 beforeEach(() => {
   __resetRuntimes();
@@ -125,13 +157,69 @@ test('a late handshake after handshake_timeout must not let backHandling trap th
   }
 });
 
-test('insets are set from safe-area-context when present', async () => {
-  await mount();
-  const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
-    ([s]) => s as string,
-  );
-  expect(injected.some((s) => s.includes('--mw-host-inset-top'))).toBe(true);
-  expect(injected.every((s) => s.trimEnd().endsWith('true;'))).toBe(true);
+test('on Android, insets are set from safe-area-context when present', async () => {
+  await onPlatform('android', async () => {
+    await mount();
+    const injected = injectedScripts();
+    expect(injected.some((s) => s.includes('--mw-host-inset-top'))).toBe(true);
+    expect(injected.every((s) => s.trimEnd().endsWith('true;'))).toBe(true);
+  });
+});
+
+test("on iOS, no insets are pushed: WKWebView's env() already covers only this view", async () => {
+  await onPlatform('ios', async () => {
+    const el = await mount();
+    await fireEvent(el, 'loadEnd');
+    expect(injectedScripts().some((s) => s.includes('--mw-host-inset'))).toBe(false);
+    expect(screen.queryByTestId('safe-area-listener')).toBeNull();
+  });
+});
+
+test('on Android, the per-view overlap replaces the window insets, and a reload re-sends it', async () => {
+  await onPlatform('android', async () => {
+    const el = await mount();
+    await fireEvent(screen.getByTestId('safe-area-listener'), 'change', {
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+    (__lastWebView().injectJavaScript as jest.Mock).mockClear();
+    await fireEvent(el, 'loadEnd');
+    expect(setsProperty('--mw-host-inset-top', 0)).toBe(true);
+    expect(setsProperty('--mw-host-inset-bottom', 0)).toBe(true);
+    expect(setsProperty('--mw-host-inset-top', 44)).toBe(false);
+    expect(injectedScripts().some((s) => s.includes('"data-host-insets", "view"'))).toBe(true);
+  });
+});
+
+test('on Android, window insets are not marked per-view, so the page keeps max() with env()', async () => {
+  await onPlatform('android', async () => {
+    await mount();
+    expect(injectedScripts().some((s) => s.includes('"data-host-insets", "window"'))).toBe(true);
+    expect(injectedScripts().some((s) => s.includes('"data-host-insets", "view"'))).toBe(false);
+  });
+});
+
+test('on Android, the overlay inside MentioraHost uses window insets, not the listener', async () => {
+  await onPlatform('android', async () => {
+    await render(
+      <ThreadChannelContext.Provider value={{ take: () => null, subscribe: () => () => {} }}>
+        <MentioraWidget widgetUrl={WIDGET_URL} />
+      </ThreadChannelContext.Provider>,
+    );
+    expect(screen.queryByTestId('safe-area-listener')).toBeNull();
+    expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
+  });
+});
+
+test('on Android, a malformed listener measurement keeps the last good insets', async () => {
+  await onPlatform('android', async () => {
+    const el = await mount();
+    await fireEvent(screen.getByTestId('safe-area-listener'), 'change', {
+      insets: { top: Number.NaN, right: 0, bottom: 0, left: 0 },
+    });
+    (__lastWebView().injectJavaScript as jest.Mock).mockClear();
+    await fireEvent(el, 'loadEnd');
+    expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
+  });
 });
 
 test('we never claim reportsViewport — the page tracks visualViewport itself', async () => {
@@ -145,21 +233,22 @@ test('we never claim reportsViewport — the page tracks visualViewport itself',
   expect(injected.some((s) => s.includes('reportsViewport'))).toBe(false);
 });
 
-test('the react-native-safe-area-context peer, when installed, is what sets the inset values', async () => {
+test('on Android, the react-native-safe-area-context peer is what sets the first inset values', async () => {
   // All four sides as exact `setProperty` calls: "44px and 34px appear somewhere" also
   // passes an implementation that swaps top and bottom or never sets right and left.
-  await mount();
-  const injected = (__lastWebView().injectJavaScript as jest.Mock).mock.calls.map(
-    ([s]) => s as string,
-  );
-  const setsProperty = (name: string, px: number): boolean =>
-    injected.some((s) =>
-      s.includes(`setProperty(${JSON.stringify(name)}, ${JSON.stringify(`${px}px`)})`),
-    );
-  expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
-  expect(setsProperty('--mw-host-inset-right', 1)).toBe(true);
-  expect(setsProperty('--mw-host-inset-bottom', 34)).toBe(true);
-  expect(setsProperty('--mw-host-inset-left', 2)).toBe(true);
+  await onPlatform('android', async () => {
+    await mount();
+    expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
+    expect(setsProperty('--mw-host-inset-right', 1)).toBe(true);
+    expect(setsProperty('--mw-host-inset-bottom', 34)).toBe(true);
+    expect(setsProperty('--mw-host-inset-left', 2)).toBe(true);
+  });
+});
+
+test('loadSafeAreaListener returns null for a peer older than 5.5, which has no SafeAreaListener', () => {
+  const old = () => ({ initialWindowMetrics: null });
+  expect(loadSafeAreaListener(() => true, old)).toBeNull();
+  expect(loadSafeAreaListener(() => false)).toBeNull();
 });
 
 // Driven through the `resolveHostInsets` seam: once the peer has resolved in this

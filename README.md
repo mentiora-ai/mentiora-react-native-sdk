@@ -4,7 +4,7 @@ Mentiora chat for React Native and Expo. It is pure JavaScript on top of `react-
 
 ## Install
 
-Requires React 18+, React Native 0.76+ and `react-native-webview` 13.6–16.
+Requires React 18+, React Native 0.76+ and `react-native-webview` 13.6.3–16.
 
 ```sh
 npm install @mentiora-ai/react-native-sdk react-native-webview @react-native-async-storage/async-storage react-native-safe-area-context

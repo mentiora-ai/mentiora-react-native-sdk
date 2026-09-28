@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AppState, BackHandler, Linking, StyleSheet, View } from 'react-native';
+import { AppState, BackHandler, Linking, Platform, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
 import { toBase64Url } from './base64url.js';
@@ -13,7 +13,13 @@ import {
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
 import { BackChannelContext, ThreadChannelContext } from './channels.js';
 import { IdentityUnavailable } from './identity.js';
-import { hostInsetsScript, resolveHostInsets } from './insets.js';
+import {
+  type HostInsets,
+  hasValidInsets,
+  hostInsetsScript,
+  loadSafeAreaListener,
+  resolveHostInsets,
+} from './insets.js';
 import { isAllowedExternal, isSameDocument, isSameOrigin } from './links.js';
 import { createLoadRecovery, type LoadRecovery } from './load-recovery.js';
 import { createRandomSource, type RandomDeps } from './random.js';
@@ -309,10 +315,28 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     emitSafely({ type: 'close' });
   };
 
-  const hostInsets = useConstant(() => resolveHostInsets());
+  const pushesInsets = useConstant(() => Platform.OS === 'android');
+  // Not in the overlay: it fills the window, and parked off-screen it would measure a 0 top.
+  const InsetListener = useConstant(() =>
+    pushesInsets && threadChannel === null ? loadSafeAreaListener() : null,
+  );
+  const hostInsets = useRef<{ insets: HostInsets; perView: boolean } | null>(null);
+  if (pushesInsets && hostInsets.current === null) {
+    const insets = resolveHostInsets();
+    if (insets) hostInsets.current = { insets, perView: false };
+  }
   const injectHostInsets = useCallback((): void => {
-    if (hostInsets) webview.current?.injectJavaScript(hostInsetsScript(hostInsets));
-  }, [hostInsets]);
+    const pushed = hostInsets.current;
+    if (pushed) webview.current?.injectJavaScript(hostInsetsScript(pushed.insets, pushed.perView));
+  }, []);
+  const onSafeAreaChange = useCallback(
+    ({ insets }: { insets: HostInsets }): void => {
+      if (!hasValidInsets(insets)) return;
+      hostInsets.current = { insets, perView: true };
+      injectHostInsets();
+    },
+    [injectHostInsets],
+  );
 
   // `webview` attaches after commit, and the first `onLoadEnd` may be late.
   useEffect(() => {
@@ -416,31 +440,41 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   // First, so Dismiss wins over an error a stray timer sets afterwards.
   if (dismissed) return <View />;
 
+  const page = (
+    <WebView<object>
+      key={remountKey}
+      ref={webview}
+      testID="mentiora-webview"
+      style={styles.webview}
+      // Fixed per instance: Android raises no `onShouldStartLoadWithRequest` for a `source` change.
+      source={{ uri: widgetPage.url }}
+      onMessage={onMessage}
+      originWhitelist={ALL_ORIGINS}
+      onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
+      // CVE-2020-6506: without it a target=_blank load replaces the top frame.
+      setSupportMultipleWindows={true}
+      onOpenWindow={onOpenWindow}
+      webviewDebuggingEnabled={__DEV__}
+      onError={onError}
+      onContentProcessDidTerminate={recovery.processTerminated}
+      onRenderProcessGone={recovery.renderProcessGone}
+      onLoadEnd={() => {
+        recovery.loadEnded();
+        injectHostInsets();
+      }}
+      importantForAccessibility={errorCode !== null ? 'no-hide-descendants' : 'auto'}
+    />
+  );
+
   return (
     <View style={styles.container}>
-      <WebView<object>
-        key={remountKey}
-        ref={webview}
-        testID="mentiora-webview"
-        style={styles.webview}
-        // Fixed per instance: Android raises no `onShouldStartLoadWithRequest` for a `source` change.
-        source={{ uri: widgetPage.url }}
-        onMessage={onMessage}
-        originWhitelist={ALL_ORIGINS}
-        onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
-        // CVE-2020-6506: without it a target=_blank load replaces the top frame.
-        setSupportMultipleWindows={true}
-        onOpenWindow={onOpenWindow}
-        webviewDebuggingEnabled={__DEV__}
-        onError={onError}
-        onContentProcessDidTerminate={recovery.processTerminated}
-        onRenderProcessGone={recovery.renderProcessGone}
-        onLoadEnd={() => {
-          recovery.loadEnded();
-          injectHostInsets();
-        }}
-        importantForAccessibility={errorCode !== null ? 'no-hide-descendants' : 'auto'}
-      />
+      {InsetListener ? (
+        <InsetListener onChange={onSafeAreaChange} style={styles.webview}>
+          {page}
+        </InsetListener>
+      ) : (
+        page
+      )}
       {/* The WebView stays mounted underneath so a running ladder can still reload it. */}
       {errorCode !== null && (
         // iOS counterpart of `importantForAccessibility` above.

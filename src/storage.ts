@@ -23,12 +23,11 @@ class StorageLoadFailure extends Error {
 }
 
 const ASYNC_STORAGE = '@react-native-async-storage/async-storage';
+const METRO_MISSING_OPTIONAL = 'Requiring unknown module "undefined"';
 
 export const defaultLoad = (
   hasRequire: () => boolean = () => typeof require === 'function',
-  // The specifier must stay a literal for Metro's static resolver.
-  requireModule: () => { default?: MentioraStorage } = () =>
-    require('@react-native-async-storage/async-storage'),
+  requireModule?: () => { default?: MentioraStorage },
 ): MentioraStorage | null => {
   if (!hasRequire()) {
     throw new StorageLoadFailure(
@@ -38,13 +37,20 @@ export const defaultLoad = (
     );
   }
   try {
-    return requireModule().default ?? null;
+    // Directly inside `try`, or Metro fails the bundle when the peer is missing.
+    const mod = requireModule
+      ? requireModule()
+      : (require('@react-native-async-storage/async-storage') as { default?: MentioraStorage });
+    return mod.default ?? null;
   } catch (err) {
     // Only the first line: a transitive miss also names the package, in the Require stack.
     const message = err instanceof Error ? err.message : String(err);
     const code = (err as { code?: unknown } | null)?.code;
+    const firstLine = message.split('\n')[0] as string;
+    // Metro's error for a missing optional module.
     const absent =
-      code === 'MODULE_NOT_FOUND' && (message.split('\n')[0] as string).includes(ASYNC_STORAGE);
+      firstLine.startsWith(METRO_MISSING_OPTIONAL) ||
+      (code === 'MODULE_NOT_FOUND' && firstLine.includes(ASYNC_STORAGE));
     throw new StorageLoadFailure(absent ? 'peer-absent' : 'load-threw', message);
   }
 };

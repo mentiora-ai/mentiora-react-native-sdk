@@ -85,10 +85,13 @@ jobs:
             "$TARBALL" \
             react@18 \
             react-native@0.76 \
-            react-native-webview@13.6.0 \
+            react-native-webview@13.6.3 \
             @react-native-async-storage/async-storage@1.23.1 \
             @types/react@18 \
-            typescript@6.0.3
+            typescript@6.0.3 \
+            @react-native-community/cli@15 \
+            @react-native/metro-config@0.76 \
+            @react-native/babel-preset@0.76
 
       # Resolution cannot evaluate an RN entry (Flow source, SyntaxError under
       # bare node), so only this walk catches a missing or eager peer import.
@@ -107,3 +110,25 @@ jobs:
           cp "$GITHUB_WORKSPACE/scripts/check-public-types.ts" check.ts
           npx tsc --noEmit --strict --moduleResolution bundler --module esnext --target esnext check.ts
           echo "types ok"
+
+      # The example bundles `src/` through Expo; this bundles the published `lib/` bare.
+      - name: A bare React Native release bundle builds without the optional peers
+        run: |
+          cd /tmp/consumer
+          npm uninstall --no-audit --no-fund @react-native-async-storage/async-storage
+          echo "module.exports = { presets: ['module:@react-native/babel-preset'] };" > babel.config.js
+          echo "module.exports = require('@react-native/metro-config').getDefaultConfig(__dirname);" > metro.config.js
+          cat > index.js <<'EOF'
+          import { AppRegistry } from 'react-native';
+          import { Mentiora, MentioraHost, MentioraWidget } from '@mentiora-ai/react-native-sdk';
+          const widgetUrl = 'https://widget.example.com/h/rn/pk_wgt_ci';
+          Mentiora.configure({ widgetUrl });
+          AppRegistry.registerComponent('Consumer', () => () => [
+            <MentioraWidget key="inline" widgetUrl={widgetUrl} />,
+            <MentioraHost key="host" />,
+          ]);
+          EOF
+          for platform in ios android; do
+            npx react-native bundle --platform "$platform" --dev false \
+              --entry-file index.js --bundle-output "/tmp/consumer/$platform.jsbundle"
+          done

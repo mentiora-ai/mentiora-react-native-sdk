@@ -75,7 +75,7 @@
     "react": ">=18",
     "react-native": ">=0.76",
     "react-native-safe-area-context": "*",
-    "react-native-webview": ">=13.6.0 <17"
+    "react-native-webview": ">=13.6.3 <17"
   },
   "peerDependenciesMeta": {
     "@react-native-async-storage/async-storage": {
