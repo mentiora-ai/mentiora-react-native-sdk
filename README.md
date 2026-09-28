@@ -10,7 +10,7 @@ Requires React 18+, React Native 0.76+ and `react-native-webview` 13.6–16.
 npm install @mentiora-ai/react-native-sdk react-native-webview @react-native-async-storage/async-storage react-native-safe-area-context
 ```
 
-The peers have native code, so they go in your app's own dependencies, where autolinking finds them; in an Expo app use `npx expo install` to get matching versions. Without AsyncStorage every launch is a new anonymous user. Without `react-native-safe-area-context`, which most apps already have, the SDK can't pass safe-area insets to the page.
+In an Expo app, use `npx expo install`. AsyncStorage keeps the anonymous user across launches; `react-native-safe-area-context` supplies safe-area insets.
 
 ## Overlay
 
