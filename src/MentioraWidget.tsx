@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AppState, BackHandler, Linking, Platform, StyleSheet, View } from 'react-native';
+import { AppState, BackHandler, Keyboard, Linking, Platform, StyleSheet, View } from 'react-native';
 import type { WebViewProps } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
 import { toBase64Url } from './base64url.js';
@@ -17,6 +17,7 @@ import {
   type HostInsets,
   hasValidInsets,
   hostInsetsScript,
+  keyboardOverlap,
   loadSafeAreaListener,
   resolveHostInsets,
 } from './insets.js';
@@ -337,6 +338,24 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     [injectHostInsets, threadChannel],
   );
 
+  const container = useRef<View | null>(null);
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  useEffect(() => {
+    if (!pushesInsets) return;
+    const show = Keyboard.addListener('keyboardDidShow', ({ endCoordinates }) => {
+      // Parked off-screen, the overlay would measure itself under the keyboard.
+      if (!(latest.current.props.visible ?? true)) return;
+      container.current?.measureInWindow((_x, y, _width, height) => {
+        setKeyboardInset(keyboardOverlap(y, height, endCoordinates.screenY));
+      });
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardInset(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [pushesInsets]);
+
   // `webview` attaches after commit, and the first `onLoadEnd` may be late.
   useEffect(() => {
     injectHostInsets();
@@ -466,7 +485,11 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   );
 
   return (
-    <View style={styles.container}>
+    <View
+      ref={container}
+      testID="mentiora-container"
+      style={[styles.container, keyboardInset > 0 ? { paddingBottom: keyboardInset } : null]}
+    >
       {InsetListener ? (
         <InsetListener onChange={onSafeAreaChange} style={styles.webview}>
           {page}

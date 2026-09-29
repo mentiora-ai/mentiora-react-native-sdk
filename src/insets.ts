@@ -61,6 +61,13 @@ export const resolveHostInsets = (
   return null;
 };
 
+// Android: from targetSdk 35 the window no longer resizes for the keyboard, and WebView before
+// M139 ignores it, so the host shrinks the frame. M139+ subtracts only what still overlaps.
+export const keyboardOverlap = (y: number, height: number, keyboardTop: number): number =>
+  Number.isFinite(y) && Number.isFinite(height) && Number.isFinite(keyboardTop)
+    ? Math.min(height, Math.max(0, y + height - keyboardTop))
+    : 0;
+
 // `perView` tells the page it may use these in place of `env()`; window insets only raise it.
 export const hostInsetsScript = (insets: HostInsets, perView = false): string => {
   const set = (name: string, px: number): string =>
