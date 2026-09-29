@@ -21,8 +21,7 @@ export default function RootLayout(): React.JSX.Element {
     <>
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        {/* The SDK applies safe-area insets; a header would double-pad the top. */}
-        <Stack.Screen name="inline" options={{ headerShown: false }} />
+        <Stack.Screen name="inline" options={{ title: 'Inline' }} />
       </Stack>
       <MentioraHost />
     </>

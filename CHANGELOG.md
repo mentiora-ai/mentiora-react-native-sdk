@@ -2,6 +2,12 @@
 
 Each release names the bridge protocol version it speaks. GitHub Release notes are copied from here.
 
+## Unreleased
+
+- An inline `<MentioraWidget />` below a header or above a tab bar no longer gets empty bands above its header and below its composer. On iOS the SDK no longer pushes insets, since WKWebView's own `env(safe-area-inset-*)` already covers only the WebView. On Android an inline widget pushes the insets that overlap it, measured by `SafeAreaListener` from `react-native-safe-area-context` 5.5 or later, and the page uses them in place of `env()`. The overlay and older peers keep the window's insets.
+- A bare React Native app without `@react-native-async-storage/async-storage` or `react-native-safe-area-context` now bundles. Metro rejected both optional peers, because their `require` calls were not directly inside a `try`. A missing AsyncStorage now reports `storageUnavailable` with reason `peer-absent`.
+- The `react-native-webview` floor is 13.6.3. Earlier versions do not bundle on React Native 0.76.
+
 ## 0.1.0
 
 First release. Speaks mobile bridge protocol **v1**.
