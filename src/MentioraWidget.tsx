@@ -316,10 +316,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   };
 
   const pushesInsets = useConstant(() => Platform.OS === 'android');
-  // Not in the overlay: it fills the window, and parked off-screen it would measure a 0 top.
-  const InsetListener = useConstant(() =>
-    pushesInsets && threadChannel === null ? loadSafeAreaListener() : null,
-  );
+  const InsetListener = useConstant(() => (pushesInsets ? loadSafeAreaListener() : null));
   const hostInsets = useRef<{ insets: HostInsets; perView: boolean } | null>(null);
   if (pushesInsets && hostInsets.current === null) {
     const insets = resolveHostInsets();
@@ -331,11 +328,13 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   }, []);
   const onSafeAreaChange = useCallback(
     ({ insets }: { insets: HostInsets }): void => {
-      if (!hasValidInsets(insets)) return;
+      // The overlay parks off-screen, where it measures a 0 top; keep its on-screen value.
+      const parked = threadChannel !== null && !(latest.current.props.visible ?? true);
+      if (parked || !hasValidInsets(insets)) return;
       hostInsets.current = { insets, perView: true };
       injectHostInsets();
     },
-    [injectHostInsets],
+    [injectHostInsets, threadChannel],
   );
 
   // `webview` attaches after commit, and the first `onLoadEnd` may be late.

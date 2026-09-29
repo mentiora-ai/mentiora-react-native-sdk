@@ -198,15 +198,38 @@ test('on Android, window insets are not marked per-view, so the page keeps max()
   });
 });
 
-test('on Android, the overlay inside MentioraHost uses window insets, not the listener', async () => {
+const overlayChannel = { take: () => null, subscribe: () => () => {} };
+const renderOverlay = (visible: boolean) => (
+  <ThreadChannelContext.Provider value={overlayChannel}>
+    <MentioraWidget widgetUrl={WIDGET_URL} visible={visible} />
+  </ThreadChannelContext.Provider>
+);
+const measure = (insets: { top: number; right: number; bottom: number; left: number }) =>
+  fireEvent(screen.getByTestId('safe-area-listener'), 'change', { insets });
+
+// `initialWindowMetrics` is null on most Android cold starts, and the fallback has no nav bar.
+test('on Android, the overlay takes its insets from the listener', async () => {
   await onPlatform('android', async () => {
-    await render(
-      <ThreadChannelContext.Provider value={{ take: () => null, subscribe: () => () => {} }}>
-        <MentioraWidget widgetUrl={WIDGET_URL} />
-      </ThreadChannelContext.Provider>,
-    );
-    expect(screen.queryByTestId('safe-area-listener')).toBeNull();
-    expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
+    const el = await render(renderOverlay(true));
+    await measure({ top: 50, right: 0, bottom: 24, left: 0 });
+    (__lastWebView().injectJavaScript as jest.Mock).mockClear();
+    await fireEvent(screen.getByTestId('mentiora-webview'), 'loadEnd');
+    expect(setsProperty('--mw-host-inset-bottom', 24)).toBe(true);
+    expect(injectedScripts().some((s) => s.includes('"data-host-insets", "view"'))).toBe(true);
+    await el.unmount();
+  });
+});
+
+test('on Android, a measurement taken while the overlay is parked off-screen is ignored', async () => {
+  await onPlatform('android', async () => {
+    const view = await render(renderOverlay(true));
+    await measure({ top: 50, right: 0, bottom: 24, left: 0 });
+    await view.rerender(renderOverlay(false));
+    await measure({ top: 0, right: 0, bottom: 24, left: 0 });
+    (__lastWebView().injectJavaScript as jest.Mock).mockClear();
+    await view.rerender(renderOverlay(true));
+    expect(setsProperty('--mw-host-inset-top', 50)).toBe(true);
+    expect(setsProperty('--mw-host-inset-top', 0)).toBe(false);
   });
 });
 
