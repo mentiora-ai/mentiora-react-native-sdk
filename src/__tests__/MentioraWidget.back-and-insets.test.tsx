@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { useLayoutEffect } from 'react';
-import { BackHandler, Platform, StatusBar } from 'react-native';
+import { BackHandler, Keyboard, Platform, StatusBar, StyleSheet, View } from 'react-native';
 import { __lastWebView, __resetWebViews } from '../../__mocks__/react-native-webview';
 import { ThreadChannelContext } from '../channels';
 import {
   hasValidInsets,
+  keyboardOverlap,
   loadSafeAreaInsets,
   loadSafeAreaListener,
   resolveHostInsets,
@@ -198,16 +199,89 @@ test('on Android, window insets are not marked per-view, so the page keeps max()
   });
 });
 
-test('on Android, the overlay inside MentioraHost uses window insets, not the listener', async () => {
+const overlayChannel = { take: () => null, subscribe: () => () => {} };
+const renderOverlay = (visible: boolean) => (
+  <ThreadChannelContext.Provider value={overlayChannel}>
+    <MentioraWidget widgetUrl={WIDGET_URL} visible={visible} />
+  </ThreadChannelContext.Provider>
+);
+const measure = (insets: { top: number; right: number; bottom: number; left: number }) =>
+  fireEvent(screen.getByTestId('safe-area-listener'), 'change', { insets });
+
+// `initialWindowMetrics` is null on most Android cold starts, and the fallback has no nav bar.
+test('on Android, the overlay takes its insets from the listener', async () => {
   await onPlatform('android', async () => {
-    await render(
-      <ThreadChannelContext.Provider value={{ take: () => null, subscribe: () => () => {} }}>
-        <MentioraWidget widgetUrl={WIDGET_URL} />
-      </ThreadChannelContext.Provider>,
-    );
-    expect(screen.queryByTestId('safe-area-listener')).toBeNull();
-    expect(setsProperty('--mw-host-inset-top', 44)).toBe(true);
+    const el = await render(renderOverlay(true));
+    await measure({ top: 50, right: 0, bottom: 24, left: 0 });
+    (__lastWebView().injectJavaScript as jest.Mock).mockClear();
+    await fireEvent(screen.getByTestId('mentiora-webview'), 'loadEnd');
+    expect(setsProperty('--mw-host-inset-bottom', 24)).toBe(true);
+    expect(injectedScripts().some((s) => s.includes('"data-host-insets", "view"'))).toBe(true);
+    await el.unmount();
   });
+});
+
+test('on Android, a measurement taken while the overlay is parked off-screen is ignored', async () => {
+  await onPlatform('android', async () => {
+    const view = await render(renderOverlay(true));
+    await measure({ top: 50, right: 0, bottom: 24, left: 0 });
+    await view.rerender(renderOverlay(false));
+    await measure({ top: 0, right: 0, bottom: 24, left: 0 });
+    (__lastWebView().injectJavaScript as jest.Mock).mockClear();
+    await view.rerender(renderOverlay(true));
+    expect(setsProperty('--mw-host-inset-top', 50)).toBe(true);
+    expect(setsProperty('--mw-host-inset-top', 0)).toBe(false);
+  });
+});
+
+test('keyboardOverlap is the part of the frame below the keyboard top, clamped to the frame', () => {
+  expect(keyboardOverlap(100, 800, 578)).toBe(322);
+  expect(keyboardOverlap(0, 500, 578)).toBe(0);
+  expect(keyboardOverlap(900, 800, 578)).toBe(800);
+  expect(keyboardOverlap(Number.NaN, 800, 578)).toBe(0);
+});
+
+type KeyboardHandler = (e: { endCoordinates: { screenY: number } }) => void;
+const keyboardHandlers = (): Record<string, KeyboardHandler> => {
+  const handlers: Record<string, KeyboardHandler> = {};
+  jest.spyOn(Keyboard, 'addListener').mockImplementation(((type: string, fn: KeyboardHandler) => {
+    handlers[type] = fn;
+    return { remove: jest.fn() };
+  }) as unknown as typeof Keyboard.addListener);
+  return handlers;
+};
+
+// Edge-to-edge Android no longer resizes the window, and WebView before M139 ignores the IME.
+test('on Android, the widget shrinks by the part the keyboard covers, and restores on hide', async () => {
+  const handlers = keyboardHandlers();
+  try {
+    await onPlatform('android', async () => {
+      await mount();
+      const container = screen.getByTestId('mentiora-container');
+      jest
+        .spyOn(View.prototype as unknown as { measureInWindow: () => void }, 'measureInWindow')
+        .mockImplementation(((cb: (x: number, y: number, w: number, h: number) => void) =>
+          cb(0, 100, 411, 800)) as () => void);
+      await act(async () => handlers.keyboardDidShow?.({ endCoordinates: { screenY: 578 } }));
+      expect(StyleSheet.flatten(container.props.style).paddingBottom).toBe(322);
+      await act(async () => handlers.keyboardDidHide?.({ endCoordinates: { screenY: 914 } }));
+      expect(StyleSheet.flatten(container.props.style).paddingBottom ?? 0).toBe(0);
+    });
+  } finally {
+    jest.restoreAllMocks();
+  }
+});
+
+test('on iOS, the widget does not listen for the keyboard: WKWebView handles it', async () => {
+  const handlers = keyboardHandlers();
+  try {
+    await onPlatform('ios', async () => {
+      await mount();
+      expect(handlers.keyboardDidShow).toBeUndefined();
+    });
+  } finally {
+    jest.restoreAllMocks();
+  }
 });
 
 test('on Android, a malformed listener measurement keeps the last good insets', async () => {
