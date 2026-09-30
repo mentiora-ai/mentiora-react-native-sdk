@@ -2,7 +2,9 @@
 
 Each release names the bridge protocol version it speaks. GitHub Release notes are copied from here.
 
-## Unreleased
+## 0.1.1
+
+Speaks mobile bridge protocol **v1**.
 
 - An inline `<MentioraWidget />` below a header or above a tab bar no longer gets empty bands above its header and below its composer. On iOS the SDK no longer pushes insets, since WKWebView's own `env(safe-area-inset-*)` already covers only the WebView. On Android the widget pushes the insets that overlap it, measured by `SafeAreaListener` from `react-native-safe-area-context` 5.5 or later, and the page uses them in place of `env()`. Older peers keep the window's insets.
 - On Android the overlay's composer and footer no longer sit under the navigation bar. `initialWindowMetrics` is null on most cold starts, and its fallback had no bottom inset.

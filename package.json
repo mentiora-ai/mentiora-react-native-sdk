@@ -1,6 +1,6 @@
 {
   "name": "@mentiora-ai/react-native-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Mentiora chat for React Native and Expo. A thin wrapper around react-native-webview implementing the host side of mobile bridge protocol v1.",
   "license": "Apache-2.0",
   "author": "Mentiora",
