@@ -66,6 +66,47 @@ test('answers initialize with OUR protocol version and a session key', async () 
   expect(reply.result?.sdk).toEqual({ name: SDK_NAME, version: SDK_VERSION });
 });
 
+const initializeResult = async (props: { brand?: string } = {}) => {
+  await render(<MentioraWidget widgetUrl={WIDGET_URL} {...props} />);
+  await initialize(screen.getByTestId('mentiora-webview'));
+  await waitForSent(1);
+  return (sent().at(-1) as { result: Record<string, unknown> }).result;
+};
+
+test('brand rides along trimmed; unset or blank leaves the key out', async () => {
+  expect((await initializeResult({ brand: ' be ' })).brand).toBe('be');
+  __resetRuntimes();
+  __resetWebViews();
+  expect(await initializeResult()).not.toHaveProperty('brand');
+  __resetRuntimes();
+  __resetWebViews();
+  expect(await initializeResult({ brand: ' ' })).not.toHaveProperty('brand');
+});
+
+test('an over-long brand throws at mount', async () => {
+  const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await expect(
+      render(<MentioraWidget widgetUrl={WIDGET_URL} brand={'b'.repeat(65)} />),
+    ).rejects.toThrow(/brand/);
+  } finally {
+    error.mockRestore();
+  }
+});
+
+test('appId is left out when neither Expo module is installed', async () => {
+  expect(await initializeResult()).not.toHaveProperty('appId');
+});
+
+test('appId is the host app id that expo-application reads', async () => {
+  jest.doMock('expo-application', () => ({ applicationId: 'com.acme.nl' }), { virtual: true });
+  try {
+    expect((await initializeResult()).appId).toBe('com.acme.nl');
+  } finally {
+    jest.dontMock('expo-application');
+  }
+});
+
 test('an unsupported protocolVersion still gets a result, never -32005', async () => {
   const el = await mount();
   await initialize(el, 99);

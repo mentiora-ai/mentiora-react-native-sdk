@@ -69,6 +69,16 @@ The SDK sends a JSON `POST` and accepts `{ "token": "…" }`, `{ "identityToken"
 
 Call `Mentiora.logout()` when the user signs out, and detach their device token in your backend. After a signed-in session, the install stays marked as signed in until `logout()`. Until then, each open without `identity` fails with an `identityError`.
 
+## Brands
+
+If one app serves several brands, pass the brand key, like `be`, that the project defines on the Mentiora platform. The SDK trims it and throws on a key longer than 64 characters.
+
+```ts
+Mentiora.configure({ widgetUrl, brand: 'be' });
+```
+
+The SDK also sends the app's bundle identifier (iOS) or package name (Android), so Mentiora can tell your apps apart without `brand`. It reads the id from `expo-application` when the app has it, and otherwise from the `expo-constants` app config. A bare React Native app without either module sends no app id; pass `brand` there.
+
 ## Events
 
 ```ts
@@ -117,7 +127,7 @@ Mentiora.configure({
 
 | | |
 | --- | --- |
-| `Mentiora.configure(config)` | Sets `widgetUrl`, `identity`, `onEvent`, `onOpenUrl`, `storage`, `strings` and `renderError`. Throws on a malformed `widgetUrl`. |
+| `Mentiora.configure(config)` | Sets `widgetUrl`, `identity`, `brand`, `onEvent`, `onOpenUrl`, `storage`, `strings` and `renderError`. Throws on a malformed `widgetUrl` or `brand`. |
 | `Mentiora.open({ threadId? })` | Shows the overlay. |
 | `Mentiora.close()` | Hides it and keeps the page loaded. |
 | `Mentiora.logout()` | Rotates the install id, clears the token and reloads. |

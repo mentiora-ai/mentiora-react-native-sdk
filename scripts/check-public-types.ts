@@ -53,6 +53,7 @@ const renderError = ({ code: shown, retry, dismiss }: MentioraErrorRenderProps) 
 const config: MentioraConfig = {
   widgetUrl: 'https://widget.acme.mentiora.ai/h/rn/pk_wgt_x',
   identity,
+  brand: 'be',
   storage,
   strings,
   renderError,

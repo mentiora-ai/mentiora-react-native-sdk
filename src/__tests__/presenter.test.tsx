@@ -120,6 +120,12 @@ test('configure with a malformed widgetUrl throws at startup, naming the expecte
   expect(() => Mentiora.configure({ widgetUrl: ORIGIN })).toThrow(/widgetUrl.*\/h\/rn\//);
 });
 
+test('configure with an over-long brand throws at startup', () => {
+  expect(() => Mentiora.configure({ widgetUrl: WIDGET_URL, brand: 'b'.repeat(65) })).toThrow(
+    /brand/,
+  );
+});
+
 test('open before configure is held and runs once configure and a host exist', async () => {
   await act(async () => {
     expect(Mentiora.open()).toBeUndefined();
