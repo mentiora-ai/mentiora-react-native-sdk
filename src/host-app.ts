@@ -57,9 +57,14 @@ export const loadAppId = (
   }
 };
 
+// Read while this module loads, inside Metro's guard. A lazy `require` after startup is the
+// outermost one, so a throwing module factory (`expo-application` installed but the app not
+// rebuilt) reaches `ErrorUtils.reportFatalError` before any `catch`, and crashes a release build.
+export const hostAppId = loadAppId();
+
 /** Trimmed; blank means unset. The platform checks it against the project's brands. */
 export const parseBrand = (brand: unknown): string | undefined => {
-  if (brand === undefined || brand === null) return undefined;
+  if (brand === undefined) return undefined;
   const key = typeof brand === 'string' ? brand.trim() : null;
   if (key === null || key.length > MAX_BRAND) {
     throw new Error(

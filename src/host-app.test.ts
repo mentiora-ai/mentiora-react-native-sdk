@@ -95,11 +95,11 @@ test('brand is trimmed, and unset or blank means absent', () => {
   assert.equal(parseBrand(' be '), 'be');
   assert.equal(parseBrand('b'.repeat(64)), 'b'.repeat(64));
   assert.equal(parseBrand(undefined), undefined);
-  assert.equal(parseBrand(null), undefined);
   assert.equal(parseBrand('  '), undefined);
 });
 
 test('a non-string or over-long brand throws', () => {
   assert.throws(() => parseBrand('b'.repeat(65)), /brand must be a string of at most 64/);
   assert.throws(() => parseBrand(1), /brand/);
+  assert.throws(() => parseBrand(null), /brand/);
 });

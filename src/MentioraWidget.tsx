@@ -12,7 +12,7 @@ import {
 } from './bridge/peer.js';
 import { ErrorCode, PROTOCOL_VERSION } from './bridge/protocol.js';
 import { BackChannelContext, ThreadChannelContext } from './channels.js';
-import { loadAppId, parseBrand } from './host-app.js';
+import { hostAppId, parseBrand } from './host-app.js';
 import { IdentityUnavailable } from './identity.js';
 import {
   type HostInsets,
@@ -86,10 +86,11 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
   const webview = useRef<Embedded | null>(null);
   const visible = props.visible ?? true;
   const backgrounded = useBackgrounded();
+  // Validated in render like `widgetUrl`, so a bad key throws at mount; first, so the
+  // throw leaves the shared runtime untouched.
+  const brand = parseBrand(props.brand);
   // `getRuntime` swaps `runtime.identity` in place on reconfigure; read it live.
   const runtime = getRuntime(props);
-  // Validated in render like `widgetUrl`, so a bad key throws at mount.
-  const brand = parseBrand(props.brand);
   const threadChannel = useContext(ThreadChannelContext);
   const registerBackPress = useContext(BackChannelContext);
 
@@ -177,7 +178,6 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
     recovery.handshakeSucceeded(gen);
     // Taken last, so a tap landing during the awaits above still rides along.
     const threadId = latest.current.threadChannel?.take() ?? null;
-    const appId = loadAppId();
     const { brand } = latest.current;
     // Never `-32005`: an old binary can still serve a page listing a newer version.
     return {
@@ -190,7 +190,7 @@ export function MentioraWidget(props: MentioraWidgetProps): React.JSX.Element {
       // peer assigns the session key only once this resolves.
       visible: (latest.current.props.visible ?? true) && !latest.current.backgrounded,
       ...(threadId !== null ? { threadId } : {}),
-      ...(appId !== undefined ? { appId } : {}),
+      ...(hostAppId !== undefined ? { appId: hostAppId } : {}),
       ...(brand !== undefined ? { brand } : {}),
     };
   };

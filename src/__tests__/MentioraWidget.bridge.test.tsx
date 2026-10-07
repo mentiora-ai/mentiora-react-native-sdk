@@ -20,6 +20,15 @@ import {
 
 const openURL = Linking.openURL as jest.Mock;
 
+// `hostAppId` is read once at module load, so the test swaps the export, not the peer.
+let mockHostAppId: string | undefined;
+jest.mock('../host-app', () => ({
+  ...jest.requireActual('../host-app'),
+  get hostAppId() {
+    return mockHostAppId;
+  },
+}));
+
 beforeEach(() => {
   jest.clearAllMocks();
   __resetRuntimes();
@@ -94,16 +103,15 @@ test('an over-long brand throws at mount', async () => {
   }
 });
 
-test('appId is left out when neither Expo module is installed', async () => {
+test('appId rides along when the host app id was read, and is left out otherwise', async () => {
   expect(await initializeResult()).not.toHaveProperty('appId');
-});
-
-test('appId is the host app id that expo-application reads', async () => {
-  jest.doMock('expo-application', () => ({ applicationId: 'com.acme.nl' }), { virtual: true });
+  __resetRuntimes();
+  __resetWebViews();
+  mockHostAppId = 'com.acme.nl';
   try {
     expect((await initializeResult()).appId).toBe('com.acme.nl');
   } finally {
-    jest.dontMock('expo-application');
+    mockHostAppId = undefined;
   }
 });
 
