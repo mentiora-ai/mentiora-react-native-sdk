@@ -2,6 +2,11 @@
 
 Each release names the bridge protocol version it speaks. GitHub Release notes are copied from here.
 
+## Unreleased
+
+- The `initialize` result carries `appId`, the iOS bundle identifier or Android package name, read from `expo-application` or else the `expo-constants` app config. Both are new optional peers. Without either, `appId` is left out.
+- New `brand` option for an app that serves several brands, like `brand: 'be'`. The SDK sends it trimmed in the `initialize` result, leaves it out when unset or blank, and throws on a non-string or a key over 64 characters.
+
 ## 0.1.1
 
 Speaks mobile bridge protocol **v1**.

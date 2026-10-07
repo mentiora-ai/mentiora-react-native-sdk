@@ -58,6 +58,9 @@ export interface MentioraConfig {
   /** Omitted means anonymous chat. Compared by reference: a new object reloads the page,
    *  so define it outside render. */
   identity?: MentioraIdentity;
+  /** Brand key for an app that serves several brands, like `'be'`; at most 64 characters,
+   *  anything else throws. Read when the page loads. */
+  brand?: string;
   /** Every event the widget raises; a throw is caught. */
   onEvent?: (event: MentioraEvent) => void;
   /** Return true to take over. Default opens https:, mailto: and tel: via Linking. */
