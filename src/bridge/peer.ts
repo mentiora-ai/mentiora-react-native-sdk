@@ -22,6 +22,10 @@ export type InitializeResult = {
   /** `false` when the document loads while parked, so the page counts no open on `ready`. */
   visible: boolean;
   threadId?: string;
+  /** iOS bundle id or Android package name; absent when unreadable. At most 255 characters. */
+  appId?: string;
+  /** The integrator's brand key, trimmed; absent when unset. At most 64 characters. */
+  brand?: string;
 };
 
 export type HostHandlers = {

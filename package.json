@@ -72,6 +72,8 @@
   },
   "peerDependencies": {
     "@react-native-async-storage/async-storage": ">=1.23.1 <4",
+    "expo-application": "*",
+    "expo-constants": "*",
     "react": ">=18",
     "react-native": ">=0.76",
     "react-native-safe-area-context": "*",
@@ -79,6 +81,12 @@
   },
   "peerDependenciesMeta": {
     "@react-native-async-storage/async-storage": {
+      "optional": true
+    },
+    "expo-application": {
+      "optional": true
+    },
+    "expo-constants": {
       "optional": true
     },
     "react-native-safe-area-context": {

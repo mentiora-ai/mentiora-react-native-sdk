@@ -13,6 +13,7 @@ import {
   type ThreadChannel,
   ThreadChannelContext,
 } from './channels.js';
+import { parseBrand } from './host-app.js';
 import { MentioraWidget } from './MentioraWidget.js';
 import { getRuntime, type MentioraRuntime } from './runtime.js';
 import type { MentioraConfig, MentioraEvent } from './types.js';
@@ -150,6 +151,7 @@ export const Mentiora = {
   configure(config: MentioraConfig): void {
     // Validated here so a bad URL fails at startup, not on the user's tap.
     parseWidgetUrl(config.widgetUrl);
+    parseBrand(config.brand);
     followInstallRef(config);
     // A mounted overlay's widget reloads itself when `identity` changes.
     setState({ config });

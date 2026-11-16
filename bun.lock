@@ -29,13 +29,17 @@
       },
       "peerDependencies": {
         "@react-native-async-storage/async-storage": ">=1.23.1 <4",
+        "expo-application": "*",
+        "expo-constants": "*",
         "react": ">=18",
         "react-native": ">=0.76",
         "react-native-safe-area-context": "*",
-        "react-native-webview": ">=13.6.0 <17",
+        "react-native-webview": ">=13.6.3 <17",
       },
       "optionalPeers": [
         "@react-native-async-storage/async-storage",
+        "expo-application",
+        "expo-constants",
         "react-native-safe-area-context",
       ],
     },
